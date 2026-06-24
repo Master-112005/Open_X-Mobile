@@ -1,0 +1,295 @@
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+
+import { useApp } from '../context/AppContext';
+import { parsePairingQrPayload } from '../services/qrPairing';
+import { colors, radius, spacing } from '../styles/theme';
+
+export default function QRPairingScreen({ navigation, route }) {
+  const [permission, requestPermission] = useCameraPermissions();
+  const [scanLocked, setScanLocked] = useState(false);
+  const [pairing, setPairing] = useState(false);
+  const {
+    deviceName,
+    pairDevice,
+    saveSettings,
+    testConnection,
+  } = useApp();
+  const selectedDeviceName = route.params?.deviceName || deviceName;
+
+  const showScanError = (message) => {
+    Alert.alert('Unable to pair', message, [
+      { text: 'Scan again', onPress: () => setScanLocked(false) },
+      { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
+    ]);
+  };
+
+  const handleBarcodeScanned = async ({ data }) => {
+    if (scanLocked) return;
+    setScanLocked(true);
+    setPairing(true);
+
+    try {
+      const payload = parsePairingQrPayload(data);
+      const port = String(payload.serverPort);
+
+      await testConnection(payload.serverIp, port);
+      await saveSettings(payload.serverIp, port);
+      await pairDevice(selectedDeviceName, payload.pairingToken);
+
+      Alert.alert('Pairing complete', 'Device paired successfully.', [
+        { text: 'OK', onPress: () => navigation.popToTop() },
+      ]);
+    } catch (error) {
+      const message =
+        error.message === 'Invalid or expired pairing code.'
+          ? 'Pairing failed.'
+          : error.message;
+      showScanError(message || 'Pairing failed.');
+    } finally {
+      setPairing(false);
+    }
+  };
+
+  if (!permission) {
+    return (
+      <View style={styles.centeredContainer}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
+
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <View style={styles.cameraIcon}>
+          <Text style={styles.cameraIconText}>QR</Text>
+        </View>
+        <Text style={styles.permissionTitle}>Camera access required</Text>
+        <Text style={styles.permissionText}>
+          OpenX uses the camera only to scan the pairing QR code shown by OpenX
+          Desktop.
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={requestPermission}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            pressed && styles.primaryButtonPressed,
+          ]}
+        >
+          <Text style={styles.primaryButtonText}>Allow camera</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => navigation.goBack()}
+          style={({ pressed }) => [
+            styles.cancelButton,
+            pressed && styles.cancelButtonPressed,
+          ]}
+        >
+          <Text style={styles.cancelButtonText}>Cancel</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <CameraView
+        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+        facing="back"
+        onBarcodeScanned={scanLocked ? undefined : handleBarcodeScanned}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <View style={styles.scrim}>
+        <View style={styles.instructions}>
+          <Text style={styles.title}>Scan pairing QR</Text>
+          <Text style={styles.subtitle}>
+            Align the QR code from OpenX Desktop inside the frame.
+          </Text>
+        </View>
+
+        <View style={styles.scannerFrame}>
+          <View style={[styles.corner, styles.topLeft]} />
+          <View style={[styles.corner, styles.topRight]} />
+          <View style={[styles.corner, styles.bottomLeft]} />
+          <View style={[styles.corner, styles.bottomRight]} />
+          {pairing && (
+            <View style={styles.pairingOverlay}>
+              <ActivityIndicator color={colors.white} size="large" />
+              <Text style={styles.pairingText}>Pairing with OpenX Desktop…</Text>
+            </View>
+          )}
+        </View>
+
+        <Pressable
+          accessibilityRole="button"
+          disabled={pairing}
+          onPress={() => navigation.goBack()}
+          style={({ pressed }) => [
+            styles.cameraCancelButton,
+            pairing && styles.buttonDisabled,
+            pressed && !pairing && styles.cameraCancelButtonPressed,
+          ]}
+        >
+          <Text style={styles.cameraCancelText}>Cancel</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { backgroundColor: colors.background, flex: 1 },
+  centeredContainer: {
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  permissionContainer: {
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  cameraIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.primaryMuted,
+    borderColor: '#3854A0',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    height: 72,
+    justifyContent: 'center',
+    marginBottom: spacing.xl,
+    width: 72,
+  },
+  cameraIconText: {
+    color: colors.primary,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  permissionTitle: { color: colors.text, fontSize: 24, fontWeight: '700' },
+  permissionText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: spacing.sm,
+    maxWidth: 340,
+    textAlign: 'center',
+  },
+  primaryButton: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    backgroundColor: colors.primary,
+    borderRadius: radius.sm,
+    height: 50,
+    justifyContent: 'center',
+    marginTop: spacing.xl,
+  },
+  primaryButtonPressed: { backgroundColor: colors.primaryPressed },
+  primaryButtonText: { color: colors.white, fontSize: 15, fontWeight: '700' },
+  cancelButton: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    height: 50,
+    justifyContent: 'center',
+    marginTop: spacing.md,
+  },
+  cancelButtonPressed: { backgroundColor: colors.surfaceElevated },
+  cancelButtonText: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  scrim: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(3, 6, 12, 0.52)',
+    flex: 1,
+    justifyContent: 'space-between',
+    paddingBottom: spacing.xxl,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+  },
+  instructions: { alignItems: 'center' },
+  title: {
+    color: colors.white,
+    fontSize: 24,
+    fontWeight: '700',
+    textShadowColor: '#000000',
+    textShadowRadius: 4,
+  },
+  subtitle: {
+    color: '#D8E0ED',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: spacing.sm,
+    maxWidth: 300,
+    textAlign: 'center',
+  },
+  scannerFrame: {
+    backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    height: 270,
+    position: 'relative',
+    width: 270,
+  },
+  corner: {
+    borderColor: colors.primary,
+    height: 46,
+    position: 'absolute',
+    width: 46,
+  },
+  topLeft: { borderLeftWidth: 4, borderTopWidth: 4, left: 0, top: 0 },
+  topRight: { borderRightWidth: 4, borderTopWidth: 4, right: 0, top: 0 },
+  bottomLeft: { borderBottomWidth: 4, borderLeftWidth: 4, bottom: 0, left: 0 },
+  bottomRight: {
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    bottom: 0,
+    right: 0,
+  },
+  pairingOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(7, 11, 20, 0.9)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  pairingText: {
+    color: colors.white,
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: spacing.md,
+  },
+  cameraCancelButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(7, 11, 20, 0.78)',
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 140,
+  },
+  cameraCancelButtonPressed: { backgroundColor: 'rgba(21, 30, 48, 0.95)' },
+  cameraCancelText: { color: colors.white, fontSize: 15, fontWeight: '700' },
+  buttonDisabled: { opacity: 0.5 },
+});

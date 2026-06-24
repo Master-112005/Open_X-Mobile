@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "OpenX Mobile",
+    "slug": "openx-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow OpenX Mobile to scan pairing QR codes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ]
+    ],
+    "android": {
+      "package": "com.openx.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#070B14"
+      },
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
+    },
+    "extra": {
+      "eas": {
+        "projectId": "a47c13bd-78f2-43f7-a225-c97ce99f417c"
+      }
+    }
+  }
+}
