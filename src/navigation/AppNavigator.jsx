@@ -1,5 +1,6 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text } from 'react-native';
 
 import HomeScreen from '../screens/HomeScreen';
@@ -34,6 +35,8 @@ export default function AppNavigator() {
           headerStyle: styles.header,
           headerTintColor: colors.text,
           headerTitleStyle: styles.headerTitle,
+          animation: 'slide_from_right',
+          gestureEnabled: true,
         }}
       >
         <Stack.Screen
@@ -52,7 +55,12 @@ export default function AppNavigator() {
                   pressed && styles.buttonPressed,
                 ]}
               >
-                <Text style={styles.settingsIcon}>⚙</Text>
+                <LinearGradient
+                  colors={[colors.surfaceElevated, colors.surface]}
+                  style={styles.settingsGradient}
+                >
+                  <Text style={styles.settingsIcon}>{'\u2699'}</Text>
+                </LinearGradient>
               </Pressable>
             ),
           })}
@@ -84,17 +92,21 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   content: { backgroundColor: colors.background },
-  header: { backgroundColor: colors.background },
-  headerTitle: { fontSize: 19, fontWeight: '700' },
+  header: { backgroundColor: colors.backgroundAlt },
+  headerTitle: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
   settingsButton: {
+    borderRadius: 12,
+    height: 38,
+    overflow: 'hidden',
+    width: 38,
+  },
+  settingsGradient: {
     alignItems: 'center',
-    backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
     borderRadius: 12,
     borderWidth: 1,
-    height: 38,
+    flex: 1,
     justifyContent: 'center',
-    width: 38,
   },
   buttonPressed: { opacity: 0.7 },
   settingsIcon: { color: colors.textSecondary, fontSize: 18 },

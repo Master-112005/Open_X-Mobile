@@ -38,7 +38,7 @@ const PAIRING_KEY = '@openx/pairing';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Android Phone';
 const PAIRING_TIMEOUT_MS = 15000;
-const CONNECTION_ERROR_MESSAGE = 'Unable to connect to OpenX Desktop.';
+const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const parseStoredObject = (value) => {
   if (!value) return {};
@@ -75,6 +75,22 @@ const initialPairingData = {
   deviceName: DEFAULT_DEVICE_NAME,
   paired: false,
   pairedAt: null,
+};
+
+const normalizeConnectionSettings = (settings) => {
+  const serverIp = String(
+    settings.serverIp ?? settings.desktopAddress ?? '',
+  ).trim();
+  const serverPort = String(
+    settings.serverPort ?? settings.desktopPort ?? DEFAULT_PORT,
+  ).trim();
+
+  return {
+    serverIp,
+    serverPort: serverPort || DEFAULT_PORT,
+    desktopAddress: serverIp,
+    desktopPort: serverPort || DEFAULT_PORT,
+  };
 };
 
 const AppContext = createContext(null);
@@ -177,8 +193,14 @@ export function AppProvider({ children }) {
         if (message.type === 'pair-success') {
           const pending = pendingPairingRef.current;
           const previousPairingData = pairingDataRef.current;
+          const currentConnection = websocketService.getConnectionConfig();
+          const receivedConnection = normalizeConnectionSettings({
+            serverIp: message.serverIp || currentConnection.serverIp,
+            serverPort: message.serverPort || currentConnection.serverPort,
+          });
           const nextPairingData = {
             ...previousPairingData,
+            deviceId: message.deviceId || previousPairingData.deviceId,
             deviceName:
               pending?.deviceName || pairingDataRef.current.deviceName,
             paired: true,
@@ -194,7 +216,15 @@ export function AppProvider({ children }) {
           }
 
           applyPairingData(nextPairingData);
-          AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData))
+          setDesktopAddress(receivedConnection.serverIp);
+          setDesktopPort(receivedConnection.serverPort);
+          Promise.all([
+            AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData)),
+            AsyncStorage.setItem(
+              SETTINGS_KEY,
+              JSON.stringify(receivedConnection),
+            ),
+          ])
             .then(() => {
               if (!pending || pendingPairingRef.current !== pending) return;
               clearTimeout(pending.timer);
@@ -419,10 +449,12 @@ export function AppProvider({ children }) {
         ]);
         if (!mounted) return;
 
-        const parsedSettings = parseStoredObject(savedSettings);
+        const parsedSettings = normalizeConnectionSettings(
+          parseStoredObject(savedSettings),
+        );
         const parsedPairing = parseStoredObject(savedPairing);
-        const savedAddress = parsedSettings.desktopAddress ?? '';
-        const savedPort = parsedSettings.desktopPort || DEFAULT_PORT;
+        const savedAddress = parsedSettings.serverIp;
+        const savedPort = parsedSettings.serverPort;
         const nextPairingData = {
           deviceId: parsedPairing.deviceId || Crypto.randomUUID(),
           deviceName: parsedPairing.deviceName || DEFAULT_DEVICE_NAME,
@@ -534,18 +566,18 @@ export function AppProvider({ children }) {
   );
 
   const saveSettings = useCallback(async (address, port) => {
-    const nextSettings = {
-      desktopAddress: address.trim(),
-      desktopPort: port.trim() || DEFAULT_PORT,
-    };
+    const nextSettings = normalizeConnectionSettings({
+      serverIp: address,
+      serverPort: port,
+    });
 
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
-    setDesktopAddress(nextSettings.desktopAddress);
-    setDesktopPort(nextSettings.desktopPort);
+    setDesktopAddress(nextSettings.serverIp);
+    setDesktopPort(nextSettings.serverPort);
 
-    if (nextSettings.desktopAddress) {
+    if (nextSettings.serverIp) {
       websocketService
-        .connect(nextSettings.desktopAddress, nextSettings.desktopPort)
+        .connect(nextSettings.serverIp, nextSettings.serverPort)
         .catch(() => {
           // Saving succeeds independently; the UI reflects connection failure.
         });

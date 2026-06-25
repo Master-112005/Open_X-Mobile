@@ -1,14 +1,8 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { useState } from 'react';
-import {
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, TextInput } from 'react-native';
 
-import { colors, radius, spacing } from '../styles/theme';
+import { colors, radius, shadows, spacing } from '../styles/theme';
 
 export default function MessageInput({
   disabled = false,
@@ -16,6 +10,7 @@ export default function MessageInput({
   onSend,
 }) {
   const [value, setValue] = useState('');
+  const [focused, setFocused] = useState(false);
   const canSend = !disabled && value.trim().length > 0;
 
   const handleSend = () => {
@@ -24,15 +19,23 @@ export default function MessageInput({
   };
 
   return (
-    <View style={styles.wrapper}>
-      <View style={styles.inputShell}>
+    <LinearGradient
+      colors={['rgba(6,8,20,0.35)', 'rgba(6,8,20,0.99)']}
+      style={styles.wrapper}
+    >
+      <LinearGradient
+        colors={[colors.surfaceElevated, colors.surfaceSoft]}
+        style={[styles.inputShell, focused && styles.inputShellFocused]}
+      >
         <TextInput
           accessibilityLabel="Message OpenX"
           blurOnSubmit={false}
           editable={!disabled}
           maxLength={1000}
           multiline
+          onBlur={() => setFocused(false)}
           onChangeText={setValue}
+          onFocus={() => setFocused(true)}
           onSubmitEditing={handleSend}
           placeholder={disabled ? 'Command unavailable' : 'Send a command...'}
           placeholderTextColor={colors.textMuted}
@@ -53,21 +56,25 @@ export default function MessageInput({
             pressed && canSend && styles.sendButtonPressed,
           ]}
         >
-          <Text style={styles.sendIcon}>↑</Text>
+          <LinearGradient
+            colors={canSend ? [colors.primary, '#5269D9'] : ['#303A50', '#273044']}
+            style={styles.sendGradient}
+          >
+            <Text style={styles.sendIcon}>{'\u2191'}</Text>
+          </LinearGradient>
         </Pressable>
-      </View>
+      </LinearGradient>
       <Text style={[styles.helper, disabled && styles.restrictedHelper]}>
         {disabled
           ? disabledMessage
           : 'Commands are sent to the connected OpenX Desktop'}
       </Text>
-    </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: {
-    backgroundColor: colors.background,
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingBottom: Platform.OS === 'android' ? spacing.md : spacing.sm,
@@ -75,14 +82,19 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   inputShell: {
+    ...shadows.card,
     alignItems: 'flex-end',
-    backgroundColor: colors.surfaceElevated,
     borderColor: colors.border,
     borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: 'row',
-    minHeight: 52,
+    minHeight: 54,
     padding: 6,
+  },
+  inputShellFocused: {
+    borderColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.2,
   },
   input: {
     color: colors.text,
@@ -96,19 +108,18 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   sendButton: {
-    alignItems: 'center',
-    backgroundColor: colors.primary,
     borderRadius: radius.md,
     height: 40,
-    justifyContent: 'center',
+    overflow: 'hidden',
     width: 40,
   },
-  sendButtonDisabled: { backgroundColor: '#2C3546' },
-  sendButtonPressed: { backgroundColor: colors.primaryPressed },
+  sendButtonDisabled: { opacity: 0.72 },
+  sendButtonPressed: { opacity: 0.78, transform: [{ scale: 0.94 }] },
+  sendGradient: { alignItems: 'center', flex: 1, justifyContent: 'center' },
   sendIcon: {
     color: colors.white,
     fontSize: 23,
-    fontWeight: '700',
+    fontWeight: '800',
     lineHeight: 25,
   },
   helper: {
@@ -117,5 +128,5 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     textAlign: 'center',
   },
-  restrictedHelper: { color: '#F6B94A' },
+  restrictedHelper: { color: colors.warning },
 });

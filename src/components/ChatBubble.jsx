@@ -1,6 +1,8 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useEffect, useRef } from 'react';
+import { AccessibilityInfo, Animated, StyleSheet, Text } from 'react-native';
 
-import { colors, radius, spacing } from '../styles/theme';
+import { colors, radius, shadows, spacing } from '../styles/theme';
 
 const formatTime = (timestamp) =>
   new Intl.DateTimeFormat(undefined, {
@@ -10,15 +12,58 @@ const formatTime = (timestamp) =>
 
 export default function ChatBubble({ message }) {
   const isUser = message.role === 'user';
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(8)).current;
+
+  useEffect(() => {
+    let active = true;
+    AccessibilityInfo.isReduceMotionEnabled().then((reduceMotion) => {
+      if (!active || reduceMotion) {
+        opacity.setValue(1);
+        translateY.setValue(0);
+        return;
+      }
+      Animated.parallel([
+        Animated.timing(opacity, {
+          duration: 260,
+          toValue: 1,
+          useNativeDriver: true,
+        }),
+        Animated.spring(translateY, {
+          damping: 18,
+          mass: 0.7,
+          stiffness: 180,
+          toValue: 0,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
+    return () => {
+      active = false;
+    };
+  }, [opacity, translateY]);
 
   return (
-    <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
+    <Animated.View
+      style={[
+        styles.row,
+        isUser ? styles.userRow : styles.assistantRow,
+        { opacity, transform: [{ translateY }] },
+      ]}
+    >
       {!isUser && (
-        <View style={styles.avatar}>
+        <LinearGradient colors={[colors.primary, '#566ED8']} style={styles.avatar}>
           <Text style={styles.avatarText}>OX</Text>
-        </View>
+        </LinearGradient>
       )}
-      <View
+      <LinearGradient
+        colors={
+          isUser
+            ? ['#4F70E0', '#3957BD']
+            : [colors.surfaceElevated, colors.assistantBubble]
+        }
+        end={{ x: 1, y: 1 }}
+        start={{ x: 0, y: 0 }}
         style={[
           styles.content,
           isUser ? styles.userContent : styles.assistantContent,
@@ -28,8 +73,8 @@ export default function ChatBubble({ message }) {
         <Text style={[styles.time, isUser && styles.userTime]}>
           {formatTime(message.timestamp)}
         </Text>
-      </View>
-    </View>
+      </LinearGradient>
+    </Animated.View>
   );
 }
 
@@ -38,51 +83,33 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     flexDirection: 'row',
     marginBottom: spacing.lg,
-    maxWidth: '88%',
+    maxWidth: '90%',
   },
   userRow: { alignSelf: 'flex-end' },
   assistantRow: { alignSelf: 'flex-start' },
   avatar: {
+    ...shadows.glow,
     alignItems: 'center',
-    backgroundColor: colors.primaryMuted,
-    borderColor: '#2E4380',
     borderRadius: radius.round,
-    borderWidth: 1,
-    height: 30,
+    height: 32,
     justifyContent: 'center',
     marginRight: spacing.sm,
-    width: 30,
+    width: 32,
   },
-  avatarText: {
-    color: colors.primary,
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
+  avatarText: { color: colors.white, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   content: {
+    ...shadows.card,
     borderRadius: radius.md,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
   },
-  userContent: {
-    backgroundColor: colors.userBubble,
-    borderBottomRightRadius: 4,
-  },
+  userContent: { borderBottomRightRadius: 5 },
   assistantContent: {
-    backgroundColor: colors.assistantBubble,
-    borderBottomLeftRadius: 4,
+    borderBottomLeftRadius: 5,
     borderColor: colors.border,
     borderWidth: 1,
   },
-  message: {
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  time: {
-    color: colors.textMuted,
-    fontSize: 10,
-    marginTop: 6,
-  },
-  userTime: { color: '#C6D4FF', textAlign: 'right' },
+  message: { color: colors.text, fontSize: 15, lineHeight: 22 },
+  time: { color: colors.textMuted, fontSize: 10, marginTop: 7 },
+  userTime: { color: '#D6DFFF', textAlign: 'right' },
 });

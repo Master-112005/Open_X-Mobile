@@ -1,14 +1,18 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Animated,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 
+import FadeInView from '../components/FadeInView';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { parsePairingQrPayload } from '../services/qrPairing';
 import { colors, radius, spacing } from '../styles/theme';
@@ -17,13 +21,43 @@ export default function QRPairingScreen({ navigation, route }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanLocked, setScanLocked] = useState(false);
   const [pairing, setPairing] = useState(false);
+  const scanProgress = useRef(new Animated.Value(0)).current;
   const {
     deviceName,
     pairDevice,
-    saveSettings,
     testConnection,
   } = useApp();
   const selectedDeviceName = route.params?.deviceName || deviceName;
+
+  useEffect(() => {
+    let animation;
+    let active = true;
+    if (!permission?.granted) return undefined;
+
+    AccessibilityInfo.isReduceMotionEnabled().then((reduceMotion) => {
+      if (!active || reduceMotion) return;
+      animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(scanProgress, {
+            duration: 1800,
+            toValue: 1,
+            useNativeDriver: true,
+          }),
+          Animated.timing(scanProgress, {
+            duration: 1800,
+            toValue: 0,
+            useNativeDriver: true,
+          }),
+        ]),
+      );
+      animation.start();
+    });
+
+    return () => {
+      active = false;
+      animation?.stop();
+    };
+  }, [permission?.granted, scanProgress]);
 
   const showScanError = (message) => {
     Alert.alert('Unable to pair', message, [
@@ -42,7 +76,6 @@ export default function QRPairingScreen({ navigation, route }) {
       const port = String(payload.serverPort);
 
       await testConnection(payload.serverIp, port);
-      await saveSettings(payload.serverIp, port);
       await pairDevice(selectedDeviceName, payload.pairingToken);
 
       Alert.alert('Pairing complete', 'Device paired successfully.', [
@@ -61,15 +94,18 @@ export default function QRPairingScreen({ navigation, route }) {
 
   if (!permission) {
     return (
-      <View style={styles.centeredContainer}>
-        <ActivityIndicator color={colors.primary} size="large" />
-      </View>
+      <ScreenBackground>
+        <View style={styles.centeredContainer}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
+      </ScreenBackground>
     );
   }
 
   if (!permission.granted) {
     return (
-      <View style={styles.permissionContainer}>
+      <ScreenBackground>
+        <FadeInView style={styles.permissionContainer}>
         <View style={styles.cameraIcon}>
           <Text style={styles.cameraIconText}>QR</Text>
         </View>
@@ -98,7 +134,8 @@ export default function QRPairingScreen({ navigation, route }) {
         >
           <Text style={styles.cancelButtonText}>Cancel</Text>
         </Pressable>
-      </View>
+        </FadeInView>
+      </ScreenBackground>
     );
   }
 
@@ -124,6 +161,23 @@ export default function QRPairingScreen({ navigation, route }) {
           <View style={[styles.corner, styles.topRight]} />
           <View style={[styles.corner, styles.bottomLeft]} />
           <View style={[styles.corner, styles.bottomRight]} />
+          {!pairing && (
+            <Animated.View
+              style={[
+                styles.scanLine,
+                {
+                  transform: [
+                    {
+                      translateY: scanProgress.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [14, 250],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            />
+          )}
           {pairing && (
             <View style={styles.pairingOverlay}>
               <ActivityIndicator color={colors.white} size="large" />
@@ -247,6 +301,18 @@ const styles = StyleSheet.create({
     height: 270,
     position: 'relative',
     width: 270,
+  },
+  scanLine: {
+    backgroundColor: colors.accent,
+    borderRadius: 999,
+    height: 2,
+    left: 10,
+    opacity: 0.85,
+    position: 'absolute',
+    right: 10,
+    shadowColor: colors.accent,
+    shadowOpacity: 0.8,
+    shadowRadius: 8,
   },
   corner: {
     borderColor: colors.primary,

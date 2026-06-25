@@ -1,5 +1,6 @@
 const RECONNECT_DELAY_MS = 5000;
 const CONNECT_TIMEOUT_MS = 8000;
+const WAITING_FOR_DESKTOP_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const CONNECTION_STATES = new Set([
   'connecting',
@@ -69,7 +70,7 @@ class OpenXWebSocketService {
       try {
         socket = new WebSocket(`ws://${this.host}:${this.port}`);
       } catch {
-        const error = new Error('Unable to connect to OpenX Desktop.');
+        const error = new Error(WAITING_FOR_DESKTOP_MESSAGE);
         this.setStatus('error');
         this.scheduleReconnect();
         reject(error);
@@ -108,7 +109,7 @@ class OpenXWebSocketService {
         if (socket !== this.socket) return;
         this.clearConnectTimeout();
         this.setStatus('error');
-        settleFailure(new Error('Unable to connect to OpenX Desktop.'));
+        settleFailure(new Error(WAITING_FOR_DESKTOP_MESSAGE));
         if (
           socket.readyState === WebSocket.CONNECTING ||
           socket.readyState === WebSocket.OPEN
@@ -123,7 +124,7 @@ class OpenXWebSocketService {
         if (socket !== this.socket) return;
         this.clearConnectTimeout();
         this.socket = null;
-        settleFailure(new Error('Unable to connect to OpenX Desktop.'));
+        settleFailure(new Error(WAITING_FOR_DESKTOP_MESSAGE));
         this.setStatus('disconnected');
         this.scheduleReconnect();
       };
@@ -257,6 +258,13 @@ class OpenXWebSocketService {
 
   getStatus() {
     return this.status;
+  }
+
+  getConnectionConfig() {
+    return {
+      serverIp: this.host,
+      serverPort: this.port,
+    };
   }
 
   subscribeToStatus(listener) {

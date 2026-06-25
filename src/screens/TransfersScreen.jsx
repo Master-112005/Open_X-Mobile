@@ -10,9 +10,11 @@ import {
 } from 'react-native';
 
 import ConnectionStatus from '../components/ConnectionStatus';
+import FadeInView from '../components/FadeInView';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { formatFileSize, pickTransferFile } from '../services/fileTransfer';
-import { colors, radius, spacing } from '../styles/theme';
+import { colors, radius, shadows, spacing } from '../styles/theme';
 
 const formatTimestamp = (timestamp) =>
   new Intl.DateTimeFormat(undefined, {
@@ -150,10 +152,13 @@ export default function TransfersScreen() {
   const canSend = sendAllowed && selectedFile && !sending && !selecting;
 
   return (
-    <ScrollView
-      contentContainerStyle={styles.content}
-      style={styles.container}
-    >
+    <ScreenBackground>
+      <FadeInView style={styles.container}>
+        <ScrollView
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          style={styles.container}
+        >
       <ConnectionStatus status={connectionStatus} />
 
       <View style={styles.heading}>
@@ -312,12 +317,14 @@ export default function TransfersScreen() {
           <Text style={styles.emptyText}>No transfer history yet.</Text>
         )}
       </View>
-    </ScrollView>
+        </ScrollView>
+      </FadeInView>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: colors.background, flex: 1 },
+  container: { flex: 1 },
   content: { paddingBottom: spacing.xxl },
   heading: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   eyebrow: {
@@ -329,8 +336,8 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     fontSize: 28,
-    fontWeight: '700',
-    letterSpacing: -0.7,
+    fontWeight: '800',
+    letterSpacing: -0.8,
     marginTop: spacing.xs,
   },
   subtitle: {
@@ -376,6 +383,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   card: {
+    ...shadows.card,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,
@@ -428,6 +436,7 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: colors.white, fontSize: 14, fontWeight: '700' },
   buttonDisabled: { opacity: 0.5 },
   listCard: {
+    ...shadows.card,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,

@@ -13,8 +13,10 @@ import {
 } from 'react-native';
 
 import ConnectionStatus from '../components/ConnectionStatus';
+import FadeInView from '../components/FadeInView';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
-import { colors, radius, spacing } from '../styles/theme';
+import { colors, radius, shadows, spacing } from '../styles/theme';
 
 export default function PairDeviceScreen({ navigation }) {
   const {
@@ -60,20 +62,24 @@ export default function PairDeviceScreen({ navigation }) {
     !pairing;
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
-    >
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
+    <ScreenBackground>
+      <FadeInView style={styles.container}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.container}
+        >
+          <ScrollView
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
       >
         <ConnectionStatus status={connectionStatus} />
         <View style={styles.heading}>
           <Text style={styles.eyebrow}>DEVICE PAIRING</Text>
           <Text style={styles.title}>Pair Device</Text>
           <Text style={styles.subtitle}>
-            Enter the one-time code or scan the QR shown by OpenX Desktop.
+            Scan the QR code shown by OpenX Desktop. Address and port are saved
+            automatically after pairing.
           </Text>
         </View>
 
@@ -89,7 +95,39 @@ export default function PairDeviceScreen({ navigation }) {
                 </View>
               )}
 
+              <Text style={styles.optionTitle}>Scan QR</Text>
+              <Text style={styles.optionSubtitle}>
+                Recommended for production setup. No desktop address entry is
+                required.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={!pairingLoaded || pairing}
+                onPress={() =>
+                  navigation.navigate('QRPairing', {
+                    deviceName: name.trim() || deviceName,
+                  })
+                }
+                style={({ pressed }) => [
+                  styles.scanButton,
+                  (!pairingLoaded || pairing) && styles.buttonDisabled,
+                  pressed && !pairing && styles.scanButtonPressed,
+                ]}
+              >
+                <Text style={styles.scanButtonText}>Scan QR to Pair</Text>
+              </Pressable>
+
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>ADVANCED</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
               <Text style={styles.optionTitle}>Enter Pairing Code</Text>
+              <Text style={styles.optionSubtitle}>
+                Manual code entry is a fallback and requires an existing saved
+                desktop connection.
+              </Text>
               <Text style={styles.label}>Device Name</Text>
               <TextInput
                 autoCapitalize="words"
@@ -120,7 +158,8 @@ export default function PairDeviceScreen({ navigation }) {
 
               {connectionStatus !== 'connected' && (
                 <Text style={styles.connectionHint}>
-                  Connect to OpenX Desktop before pairing.
+                  Scan QR first or configure Advanced Settings before using a
+                  manual code.
                 </Text>
               )}
 
@@ -139,29 +178,6 @@ export default function PairDeviceScreen({ navigation }) {
                 ) : (
                   <Text style={styles.pairButtonText}>Pair Device</Text>
                 )}
-              </Pressable>
-
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <Pressable
-                accessibilityRole="button"
-                disabled={!pairingLoaded || pairing}
-                onPress={() =>
-                  navigation.navigate('QRPairing', {
-                    deviceName: name.trim() || deviceName,
-                  })
-                }
-                style={({ pressed }) => [
-                  styles.scanButton,
-                  (!pairingLoaded || pairing) && styles.buttonDisabled,
-                  pressed && !pairing && styles.scanButtonPressed,
-                ]}
-              >
-                <Text style={styles.scanButtonText}>Scan QR</Text>
               </Pressable>
 
               <Pressable
@@ -183,13 +199,15 @@ export default function PairDeviceScreen({ navigation }) {
         <Text style={styles.privacyNote}>
           The device identifier is generated once and stored only on this phone.
         </Text>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </FadeInView>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: colors.background, flex: 1 },
+  container: { flex: 1 },
   content: { flexGrow: 1, paddingBottom: spacing.xxl },
   heading: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   eyebrow: {
@@ -201,8 +219,8 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     fontSize: 28,
-    fontWeight: '700',
-    letterSpacing: -0.7,
+    fontWeight: '800',
+    letterSpacing: -0.8,
     marginTop: spacing.xs,
   },
   subtitle: {
@@ -212,6 +230,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   card: {
+    ...shadows.card,
     backgroundColor: colors.surface,
     borderColor: colors.border,
     borderRadius: radius.md,
@@ -243,6 +262,12 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 16,
     fontWeight: '700',
+    marginBottom: spacing.xs,
+  },
+  optionSubtitle: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
     marginBottom: spacing.lg,
   },
   label: {
