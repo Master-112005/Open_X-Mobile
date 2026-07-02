@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 
 import FadeInView from '../components/FadeInView';
+import GlassButton from '../components/GlassButton';
+import GlassPanel from '../components/GlassPanel';
 import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { parsePairingQrPayload } from '../services/qrPairing';
@@ -74,8 +76,28 @@ export default function QRPairingScreen({ navigation, route }) {
     try {
       const payload = parsePairingQrPayload(data);
       const port = String(payload.serverPort);
+      const candidates = payload.serverIpCandidates?.length
+        ? payload.serverIpCandidates
+        : [payload.serverIp];
+      let connected = false;
+      let lastConnectionError = null;
 
-      await testConnection(payload.serverIp, port);
+      for (const address of candidates) {
+        try {
+          await testConnection(address, port);
+          connected = true;
+          break;
+        } catch (connectionError) {
+          lastConnectionError = connectionError;
+        }
+      }
+
+      if (!connected) {
+        throw new Error(
+          lastConnectionError?.message || 'Waiting for OpenX Desktop...',
+        );
+      }
+
       await pairDevice(selectedDeviceName, payload.pairingToken);
 
       Alert.alert('Pairing complete', 'Device paired successfully.', [
@@ -106,34 +128,32 @@ export default function QRPairingScreen({ navigation, route }) {
     return (
       <ScreenBackground>
         <FadeInView style={styles.permissionContainer}>
-        <View style={styles.cameraIcon}>
-          <Text style={styles.cameraIconText}>QR</Text>
-        </View>
-        <Text style={styles.permissionTitle}>Camera access required</Text>
-        <Text style={styles.permissionText}>
-          OpenX uses the camera only to scan the pairing QR code shown by OpenX
-          Desktop.
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          onPress={requestPermission}
-          style={({ pressed }) => [
-            styles.primaryButton,
-            pressed && styles.primaryButtonPressed,
-          ]}
-        >
-          <Text style={styles.primaryButtonText}>Allow camera</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => navigation.goBack()}
-          style={({ pressed }) => [
-            styles.cancelButton,
-            pressed && styles.cancelButtonPressed,
-          ]}
-        >
-          <Text style={styles.cancelButtonText}>Cancel</Text>
-        </Pressable>
+          <GlassPanel
+            style={styles.permissionPanel}
+            contentStyle={styles.permissionPanelContent}
+          >
+            <View style={styles.cameraIcon}>
+              <Text style={styles.cameraIconText}>QR</Text>
+            </View>
+            <Text style={styles.permissionTitle}>Camera access required</Text>
+            <Text style={styles.permissionText}>
+              OpenX uses the camera only to scan the pairing QR code shown by
+              OpenX Desktop.
+            </Text>
+            <GlassButton
+              icon="CAM"
+              label="Allow camera"
+              onPress={requestPermission}
+              style={styles.permissionButton}
+              tone="primary"
+            />
+            <GlassButton
+              icon="BACK"
+              label="Cancel"
+              onPress={() => navigation.goBack()}
+              style={styles.permissionButton}
+            />
+          </GlassPanel>
         </FadeInView>
       </ScreenBackground>
     );
@@ -181,7 +201,7 @@ export default function QRPairingScreen({ navigation, route }) {
           {pairing && (
             <View style={styles.pairingOverlay}>
               <ActivityIndicator color={colors.white} size="large" />
-              <Text style={styles.pairingText}>Pairing with OpenX Desktop…</Text>
+              <Text style={styles.pairingText}>Pairing with OpenX Desktop...</Text>
             </View>
           )}
         </View>
@@ -213,15 +233,19 @@ const styles = StyleSheet.create({
   },
   permissionContainer: {
     alignItems: 'center',
-    backgroundColor: colors.background,
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: spacing.xl,
   },
+  permissionPanel: { alignSelf: 'stretch' },
+  permissionPanelContent: {
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
   cameraIcon: {
     alignItems: 'center',
-    backgroundColor: colors.primaryMuted,
-    borderColor: '#3854A0',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.borderBright,
     borderRadius: radius.lg,
     borderWidth: 1,
     height: 72,
@@ -244,36 +268,10 @@ const styles = StyleSheet.create({
     maxWidth: 340,
     textAlign: 'center',
   },
-  primaryButton: {
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    height: 50,
-    justifyContent: 'center',
-    marginTop: spacing.xl,
-  },
-  primaryButtonPressed: { backgroundColor: colors.primaryPressed },
-  primaryButtonText: { color: colors.white, fontSize: 15, fontWeight: '700' },
-  cancelButton: {
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    borderColor: colors.border,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    height: 50,
-    justifyContent: 'center',
-    marginTop: spacing.md,
-  },
-  cancelButtonPressed: { backgroundColor: colors.surfaceElevated },
-  cancelButtonText: {
-    color: colors.textSecondary,
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  permissionButton: { alignSelf: 'stretch', marginTop: spacing.md },
   scrim: {
     alignItems: 'center',
-    backgroundColor: 'rgba(3, 6, 12, 0.52)',
+    backgroundColor: colors.overlay,
     flex: 1,
     justifyContent: 'space-between',
     paddingBottom: spacing.xxl,
@@ -297,8 +295,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   scannerFrame: {
-    backgroundColor: 'rgba(0, 0, 0, 0.08)',
+    backgroundColor: 'rgba(7, 11, 20, 0.2)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: radius.lg,
+    borderWidth: 1,
     height: 270,
+    overflow: 'hidden',
     position: 'relative',
     width: 270,
   },
@@ -331,7 +333,7 @@ const styles = StyleSheet.create({
   },
   pairingOverlay: {
     alignItems: 'center',
-    backgroundColor: 'rgba(7, 11, 20, 0.9)',
+    backgroundColor: 'rgba(7, 11, 20, 0.88)',
     bottom: 0,
     justifyContent: 'center',
     left: 0,

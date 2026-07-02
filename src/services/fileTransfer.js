@@ -124,7 +124,9 @@ export async function storeIncomingFile(payload) {
   const declaredSize = Number(payload?.fileSize);
   const data = payload?.data;
   const expectedHash =
-    typeof payload?.hash === 'string' ? payload.hash.trim().toLowerCase() : '';
+    typeof payload?.hash === 'string'
+      ? payload.hash.trim().toLowerCase()
+      : (typeof payload?.sha256 === 'string' ? payload.sha256.trim().toLowerCase() : '');
 
   if (
     !fileName ||

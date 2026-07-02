@@ -11,38 +11,50 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import ConnectionStatus from '../components/ConnectionStatus';
-import FadeInView from '../components/FadeInView';
-import ScreenBackground from '../components/ScreenBackground';
+import GlassButton from '../components/GlassButton';
+import GlassPanel from '../components/GlassPanel';
 import { useApp } from '../context/AppContext';
-import { colors, radius, shadows, spacing } from '../styles/theme';
+import { colors, radius, spacing } from '../styles/theme';
 
 const PERMISSION_ITEMS = [
-  { key: 'remoteCommands', label: 'Remote Commands' },
-  { key: 'fileTransfer', label: 'File Transfer' },
-  { key: 'receiveFiles', label: 'Receive Files' },
-  { key: 'sendFiles', label: 'Send Files' },
-  { key: 'powerActions', label: 'Power Actions' },
+  { key: 'remoteCommands', label: 'Desktop commands' },
+  { key: 'fileTransfer', label: 'File transfer' },
+  { key: 'receiveFiles', label: 'Receive files' },
+  { key: 'sendFiles', label: 'Send files' },
+  { key: 'powerActions', label: 'Power actions' },
 ];
+
+function HeaderButton({ label, onPress }) {
+  return (
+    <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
+    >
+      <Text style={styles.headerButtonText}>{label}</Text>
+    </Pressable>
+  );
+}
 
 export default function SettingsScreen({ navigation }) {
   const {
-    connectionStatus,
     desktopAddress,
     desktopPort,
-    saveSettings,
-    settingsLoaded,
-    testConnection,
     permissions,
     permissionsLastUpdated,
     permissionsLoaded,
+    saveSettings,
+    settingsLoaded,
+    testConnection,
   } = useApp();
   const [address, setAddress] = useState(desktopAddress);
   const [port, setPort] = useState(desktopPort);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [advancedVisible, setAdvancedVisible] = useState(false);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (settingsLoaded) {
@@ -51,22 +63,17 @@ export default function SettingsScreen({ navigation }) {
     }
   }, [desktopAddress, desktopPort, settingsLoaded]);
 
+  const validatePort = () => /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+
   const handleSave = async () => {
-    if (
-      port &&
-      (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)
-    ) {
+    if (!validatePort()) {
       Alert.alert('Invalid port', 'Enter a port number between 1 and 65535.');
       return;
     }
-
     setSaving(true);
     try {
       await saveSettings(address, port);
-      Alert.alert(
-        'Advanced settings saved',
-        'The desktop connection fallback was stored on this device.',
-      );
+      Alert.alert('Saved', 'Manual fallback connection was saved.');
     } catch {
       Alert.alert('Unable to save', 'Please try again.');
     } finally {
@@ -79,434 +86,239 @@ export default function SettingsScreen({ navigation }) {
       Alert.alert('Desktop address required', 'Enter the OpenX Desktop IP address.');
       return;
     }
-
-    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+    if (!validatePort()) {
       Alert.alert('Invalid port', 'Enter a port number between 1 and 65535.');
       return;
     }
-
     setTesting(true);
     try {
       await testConnection(address, port);
-      Alert.alert('Connection successful', 'OpenX Desktop is reachable.');
+      Alert.alert('Connected', 'OpenX Desktop is reachable.');
     } catch {
-      Alert.alert('Connection pending', 'Waiting for OpenX Desktop...');
+      Alert.alert('Waiting', 'OpenX Desktop is not reachable yet.');
     } finally {
       setTesting(false);
     }
   };
 
   return (
-    <ScreenBackground>
-      <FadeInView style={styles.container}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.container}
+    <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.screen}
+      >
+        <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <HeaderButton label="BACK" onPress={() => navigation.goBack()} />
+          <HeaderButton label="QR" onPress={() => navigation.navigate('QRPairing')} />
+        </View>
+
+        <ScrollView
+          contentContainerStyle={[styles.content, { paddingTop: insets.top + 84, paddingBottom: insets.bottom + spacing.xl }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <ScrollView
-            contentContainerStyle={styles.content}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            <ConnectionStatus status={connectionStatus} />
-            <View style={styles.heading}>
-              <Text style={styles.eyebrow}>CONNECTION</Text>
-              <Text style={styles.title}>OpenX setup</Text>
-              <Text style={styles.subtitle}>
-                Pair this phone by scanning the QR code shown by OpenX Desktop.
-                Saved connection details are reused automatically on every launch.
-              </Text>
-            </View>
+          <Text style={styles.title}>Settings</Text>
 
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => navigation.navigate('PairDevice')}
-              style={({ pressed }) => [
-                styles.actionButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-            >
-              <View style={styles.actionCopy}>
-                <Text style={styles.actionTitle}>Pair Device</Text>
-                <Text style={styles.actionText}>
-                  Scan the QR code displayed by OpenX Desktop
-                </Text>
+          <Text style={styles.sectionTitle}>Desktop permissions</Text>
+          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+            {permissionsLoaded ? (
+              <View style={styles.permissionList}>
+                {PERMISSION_ITEMS.map((item) => {
+                  const allowed = permissions[item.key];
+                  return (
+                    <View key={item.key} style={styles.permissionRow}>
+                      <Text style={styles.permissionLabel}>{item.label}</Text>
+                      <View style={[styles.permissionDot, allowed ? styles.allowed : styles.denied]} />
+                    </View>
+                  );
+                })}
               </View>
-              <Text style={styles.actionArrow}>›</Text>
-            </Pressable>
+            ) : (
+              <ActivityIndicator color={colors.text} style={styles.loader} />
+            )}
+            <Text style={styles.updatedText}>
+              {permissionsLastUpdated
+                ? `Updated ${new Date(permissionsLastUpdated).toLocaleString()}`
+                : 'Waiting for desktop permission state'}
+            </Text>
+          </GlassPanel>
 
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => navigation.navigate('Transfers')}
-              style={({ pressed }) => [
-                styles.actionButton,
-                pressed && styles.actionButtonPressed,
-              ]}
-            >
-              <View style={styles.actionCopy}>
-                <Text style={styles.actionTitle}>File Transfers</Text>
-                <Text style={styles.actionText}>
-                  Send and receive files with OpenX Desktop
-                </Text>
-              </View>
-              <Text style={styles.actionArrow}>›</Text>
-            </Pressable>
+          <Text style={styles.sectionTitle}>Manual fallback</Text>
+          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+            {!settingsLoaded ? (
+              <ActivityIndicator color={colors.text} />
+            ) : (
+              <>
+                <Text style={styles.label}>Desktop address</Text>
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  onChangeText={setAddress}
+                  placeholder="192.168.1.100"
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="next"
+                  style={styles.input}
+                  value={address}
+                />
 
-            <View style={styles.permissionsSection}>
-              <Text style={styles.permissionsTitle}>Device Permissions</Text>
-              <Text style={styles.permissionsSubtitle}>
-                Desktop controls permissions. These settings are read-only.
-              </Text>
+                <Text style={[styles.label, styles.fieldGap]}>Port</Text>
+                <TextInput
+                  keyboardType="number-pad"
+                  maxLength={5}
+                  onChangeText={(value) => setPort(value.replace(/\D/g, ''))}
+                  placeholder="8080"
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="done"
+                  style={styles.input}
+                  value={port}
+                />
 
-              <View style={styles.permissionsCard}>
-                {permissionsLoaded ? (
-                  PERMISSION_ITEMS.map((item, index) => {
-                    const allowed = permissions[item.key];
-                    return (
-                      <View
-                        key={item.key}
-                        style={[
-                          styles.permissionRow,
-                          index === PERMISSION_ITEMS.length - 1 &&
-                            styles.permissionRowLast,
-                        ]}
-                      >
-                        <Text style={styles.permissionLabel}>{item.label}</Text>
-                        <View
-                          style={[
-                            styles.permissionBadge,
-                            allowed
-                              ? styles.permissionBadgeAllowed
-                              : styles.permissionBadgeDisabled,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.permissionValue,
-                              allowed
-                                ? styles.permissionValueAllowed
-                                : styles.permissionValueDisabled,
-                            ]}
-                          >
-                            {allowed ? 'Allowed' : 'Disabled'}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })
-                ) : (
-                  <ActivityIndicator
-                    color={colors.primary}
-                    style={styles.permissionLoader}
+                <View style={styles.buttonRow}>
+                  <GlassButton
+                    disabled={testing || saving}
+                    label="Test"
+                    loading={testing}
+                    onPress={handleTestConnection}
+                    style={styles.buttonFlex}
                   />
-                )}
-              </View>
-
-              <Text style={styles.permissionsUpdated}>
-                {permissionsLastUpdated
-                  ? `Last updated ${new Date(permissionsLastUpdated).toLocaleString()}`
-                  : 'Waiting for permission update from desktop'}
-              </Text>
-
-              {permissionsLoaded && !permissions.powerActions && (
-                <Text style={styles.powerRestriction}>
-                  Power actions disabled.
-                </Text>
-              )}
-            </View>
-
-            <View style={styles.advancedSection}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setAdvancedVisible((visible) => !visible)}
-                style={({ pressed }) => [
-                  styles.advancedToggle,
-                  pressed && styles.actionButtonPressed,
-                ]}
-              >
-                <View style={styles.actionCopy}>
-                  <Text style={styles.actionTitle}>Advanced Settings</Text>
-                  <Text style={styles.actionText}>
-                    Manual desktop address fallback for diagnostics
-                  </Text>
+                  <GlassButton
+                    disabled={saving || testing}
+                    label="Save"
+                    loading={saving}
+                    onPress={handleSave}
+                    style={styles.buttonFlex}
+                  />
                 </View>
-                <Text style={styles.actionArrow}>
-                  {advancedVisible ? '⌃' : '⌄'}
-                </Text>
-              </Pressable>
+              </>
+            )}
+          </GlassPanel>
 
-              {advancedVisible && (
-                <View style={styles.card}>
-                  {!settingsLoaded ? (
-                    <ActivityIndicator color={colors.primary} />
-                  ) : (
-                    <>
-                      <Text style={styles.advancedWarning}>
-                        Normal setup uses QR pairing. Change these values only
-                        when troubleshooting a local network connection.
-                      </Text>
-
-                      <Text style={styles.label}>Desktop address</Text>
-                      <TextInput
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                        keyboardType="url"
-                        onChangeText={setAddress}
-                        placeholder="192.168.1.100"
-                        placeholderTextColor={colors.textMuted}
-                        returnKeyType="next"
-                        style={styles.input}
-                        value={address}
-                      />
-
-                      <Text style={[styles.label, styles.portLabel]}>Port</Text>
-                      <TextInput
-                        keyboardType="number-pad"
-                        maxLength={5}
-                        onChangeText={(value) => setPort(value.replace(/\D/g, ''))}
-                        placeholder="8080"
-                        placeholderTextColor={colors.textMuted}
-                        returnKeyType="done"
-                        style={styles.input}
-                        value={port}
-                      />
-
-                      <Pressable
-                        accessibilityRole="button"
-                        disabled={testing || saving}
-                        onPress={handleTestConnection}
-                        style={({ pressed }) => [
-                          styles.testButton,
-                          pressed && styles.testButtonPressed,
-                          (testing || saving) && styles.saveButtonDisabled,
-                        ]}
-                      >
-                        {testing ? (
-                          <ActivityIndicator color={colors.primary} />
-                        ) : (
-                          <Text style={styles.testText}>Test connection</Text>
-                        )}
-                      </Pressable>
-
-                      <Pressable
-                        accessibilityRole="button"
-                        disabled={saving || testing}
-                        onPress={handleSave}
-                        style={({ pressed }) => [
-                          styles.saveButton,
-                          pressed && styles.saveButtonPressed,
-                          (saving || testing) && styles.saveButtonDisabled,
-                        ]}
-                      >
-                        {saving ? (
-                          <ActivityIndicator color={colors.white} />
-                        ) : (
-                          <Text style={styles.saveText}>
-                            Save advanced settings
-                          </Text>
-                        )}
-                      </Pressable>
-                    </>
-                  )}
-                </View>
-              )}
-            </View>
-
-            <View style={styles.note}>
-              <Text style={styles.noteTitle}>Automatic connection</Text>
-              <Text style={styles.noteText}>
-                OpenX Mobile reconnects every five seconds when Wi-Fi or OpenX
-                Desktop becomes unavailable. QR pairing stores the desktop
-                address, port, device identity, and session for future launches.
-              </Text>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </FadeInView>
-    </ScreenBackground>
+          <Text style={styles.sectionTitle}>Advanced connection</Text>
+          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+            <Text style={styles.advancedText}>
+              QR pairing is the normal path. Manual fallback is only for local network troubleshooting.
+            </Text>
+          </GlassPanel>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content: { paddingBottom: spacing.xxl },
-  heading: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
-  eyebrow: {
-    color: colors.primary,
+  screen: {
+    backgroundColor: colors.background,
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 0,
+    paddingHorizontal: spacing.lg,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 10,
+  },
+  headerButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glass,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  headerButtonText: {
+    color: colors.text,
     fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.6,
+    fontWeight: '900',
+  },
+  pressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.96 }],
+  },
+  content: {
+    paddingHorizontal: spacing.lg,
   },
   title: {
     color: colors.text,
-    fontSize: 28,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-    marginTop: spacing.xs,
+    fontSize: 30,
+    fontWeight: '900',
+    marginBottom: spacing.xl,
   },
-  subtitle: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: spacing.sm,
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: spacing.sm,
+    marginTop: spacing.lg,
   },
-  actionButton: {
-    ...shadows.card,
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-    marginHorizontal: spacing.lg,
+  card: {
+    borderRadius: radius.lg,
+  },
+  cardContent: {
     padding: spacing.lg,
   },
-  actionButtonPressed: { backgroundColor: colors.surfaceElevated },
-  actionCopy: { flex: 1, paddingRight: spacing.md },
-  actionTitle: { color: colors.text, fontSize: 15, fontWeight: '700' },
-  actionText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    lineHeight: 16,
-    marginTop: spacing.xs,
-  },
-  actionArrow: { color: colors.primary, fontSize: 28, fontWeight: '700' },
-  permissionsSection: { marginBottom: spacing.lg, marginHorizontal: spacing.lg },
-  permissionsTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
-  permissionsSubtitle: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: spacing.xs,
-  },
-  permissionsCard: {
-    ...shadows.card,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    marginTop: spacing.md,
-    overflow: 'hidden',
+  permissionList: {
+    gap: spacing.md,
   },
   permissionRow: {
     alignItems: 'center',
-    borderBottomColor: colors.border,
-    borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 52,
-    paddingHorizontal: spacing.md,
+    minHeight: 32,
   },
-  permissionRowLast: { borderBottomWidth: 0 },
-  permissionLabel: { color: colors.text, fontSize: 13, fontWeight: '600' },
-  permissionBadge: {
+  permissionLabel: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  permissionDot: {
     borderRadius: radius.round,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    height: 10,
+    width: 10,
   },
-  permissionBadgeAllowed: { backgroundColor: '#112D24' },
-  permissionBadgeDisabled: { backgroundColor: '#351D25' },
-  permissionValue: { fontSize: 10, fontWeight: '800' },
-  permissionValueAllowed: { color: '#83E7B3' },
-  permissionValueDisabled: { color: '#F1848D' },
-  permissionLoader: { margin: spacing.xl },
-  permissionsUpdated: {
+  allowed: { backgroundColor: colors.success },
+  denied: { backgroundColor: colors.danger },
+  updatedText: {
     color: colors.textMuted,
-    fontSize: 10,
-    marginTop: spacing.sm,
+    fontSize: 11,
+    marginTop: spacing.lg,
   },
-  powerRestriction: {
-    color: '#F6B94A',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: spacing.sm,
-  },
-  advancedSection: { marginBottom: spacing.lg },
-  advancedToggle: {
-    ...shadows.card,
-    alignItems: 'center',
-    backgroundColor: colors.surfaceSoft,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginHorizontal: spacing.lg,
-    padding: spacing.lg,
-  },
-  card: {
-    ...shadows.card,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.md,
-    minHeight: 310,
-    padding: spacing.lg,
-    justifyContent: 'center',
-  },
-  advancedWarning: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    marginBottom: spacing.lg,
+  loader: {
+    marginVertical: spacing.lg,
   },
   label: {
     color: colors.textSecondary,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '800',
     marginBottom: spacing.sm,
   },
-  portLabel: { marginTop: spacing.lg },
+  fieldGap: {
+    marginTop: spacing.lg,
+  },
   input: {
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: colors.glassSubtle,
     borderColor: colors.border,
-    borderRadius: radius.sm,
+    borderRadius: radius.lg,
     borderWidth: 1,
     color: colors.text,
     fontSize: 15,
-    height: 50,
-    paddingHorizontal: 14,
+    height: 54,
+    paddingHorizontal: spacing.lg,
   },
-  saveButton: {
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    borderRadius: radius.sm,
-    height: 50,
-    justifyContent: 'center',
-    marginTop: spacing.md,
+  buttonRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.lg,
   },
-  saveButtonPressed: { backgroundColor: colors.primaryPressed },
-  saveButtonDisabled: { opacity: 0.65 },
-  saveText: { color: colors.white, fontSize: 15, fontWeight: '700' },
-  testButton: {
-    alignItems: 'center',
-    backgroundColor: colors.primaryMuted,
-    borderColor: '#3854A0',
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    height: 50,
-    justifyContent: 'center',
-    marginTop: spacing.xl,
-  },
-  testButtonPressed: { backgroundColor: '#24376D' },
-  testText: { color: '#B9C8FF', fontSize: 15, fontWeight: '700' },
-  note: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: '#283C76',
-    borderRadius: radius.md,
-    borderWidth: 1,
-    marginHorizontal: spacing.lg,
-    padding: spacing.lg,
-  },
-  noteTitle: { color: '#B9C8FF', fontSize: 13, fontWeight: '700' },
-  noteText: {
+  buttonFlex: { flex: 1 },
+  advancedText: {
     color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: spacing.xs,
+    fontSize: 13,
+    lineHeight: 19,
   },
 });

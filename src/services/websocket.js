@@ -1,5 +1,9 @@
 const RECONNECT_DELAY_MS = 5000;
 const CONNECT_TIMEOUT_MS = 8000;
+const FILE_TRANSFER_CHUNK_BYTES = 256 * 1024;
+const FILE_TRANSFER_CHUNK_BASE64_LENGTH = Math.ceil(FILE_TRANSFER_CHUNK_BYTES / 3) * 4;
+const FILE_TRANSFER_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
+const FILE_TRANSFER_DRAIN_DELAY_MS = 8;
 const WAITING_FOR_DESKTOP_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const CONNECTION_STATES = new Set([
@@ -16,6 +20,8 @@ const normalizeHost = (host) =>
     .replace(/^wss?:\/\//i, '')
     .split('/')[0]
     .replace(/:\d+$/, '');
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class OpenXWebSocketService {
   socket = null;
@@ -176,7 +182,7 @@ class OpenXWebSocketService {
       return payload;
     } catch {
       this.setStatus('error');
-      this.socket.close();
+      this.socket?.close?.();
       return false;
     }
   }
@@ -209,7 +215,7 @@ class OpenXWebSocketService {
     }
   }
 
-  sendFileTransfer({
+  async sendFileTransfer({
     requestId,
     timestamp,
     deviceId,
@@ -234,25 +240,75 @@ class OpenXWebSocketService {
       return false;
     }
 
-    const payload = {
-      type: 'file-transfer',
-      requestId,
-      timestamp,
-      deviceId,
-      sessionToken,
-      fileName,
-      fileSize,
-      data,
-      hash,
-    };
-
     try {
-      this.socket.send(JSON.stringify(payload));
+      const transferId = requestId;
+      const chunkCount = Math.max(
+        1,
+        Math.ceil(data.length / FILE_TRANSFER_CHUNK_BASE64_LENGTH),
+      );
+
+      this.sendJson({
+        type: 'file-transfer-start',
+        requestId,
+        transferId,
+        timestamp,
+        deviceId,
+        sessionToken,
+        fileName,
+        fileSize,
+        sha256: hash,
+        hash,
+        chunkCount,
+      });
+
+      for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+        const offset = chunkIndex * FILE_TRANSFER_CHUNK_BASE64_LENGTH;
+        const chunk = data.slice(offset, offset + FILE_TRANSFER_CHUNK_BASE64_LENGTH);
+        this.sendJson({
+          type: 'file-transfer-chunk',
+          requestId: `${requestId}:${chunkIndex}`,
+          transferId,
+          timestamp: Date.now(),
+          deviceId,
+          sessionToken,
+          chunkIndex,
+          data: chunk,
+        });
+        await this.waitForSocketDrain();
+      }
+
+      this.sendJson({
+        type: 'file-transfer-complete',
+        requestId: `${requestId}:complete`,
+        transferId,
+        timestamp: Date.now(),
+        deviceId,
+        sessionToken,
+      });
       return true;
     } catch {
       this.setStatus('error');
       this.socket.close();
       return false;
+    }
+  }
+
+  sendJson(payload) {
+    if (
+      this.status !== 'connected' ||
+      this.socket?.readyState !== WebSocket.OPEN
+    ) {
+      throw new Error('Desktop connection is not open.');
+    }
+    this.socket.send(JSON.stringify(payload));
+  }
+
+  async waitForSocketDrain() {
+    while (
+      this.socket?.readyState === WebSocket.OPEN &&
+      Number(this.socket?.bufferedAmount || 0) > FILE_TRANSFER_MAX_BUFFERED_BYTES
+    ) {
+      await sleep(FILE_TRANSFER_DRAIN_DELAY_MS);
     }
   }
 
@@ -299,6 +355,9 @@ class OpenXWebSocketService {
         message.type === 'pair-success' ||
         message.type === 'pair-failed' ||
         message.type === 'incoming-file' ||
+        message.type === 'file-transfer-started' ||
+        message.type === 'file-transfer-progress' ||
+        message.type === 'file-transfer-success' ||
         message.type === 'permissions' ||
         message.type === 'session-expired' ||
         message.type === 'session-renewed' ||

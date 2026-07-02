@@ -63,12 +63,7 @@ const createMessage = (role, text, timestamp = Date.now()) => {
   };
 };
 
-const initialMessages = [
-  createMessage(
-    'assistant',
-    'OpenX Mobile is ready. Connect and pair this device to send a command.',
-  ),
-];
+const initialMessages = [];
 
 const initialPairingData = {
   deviceId: '',
@@ -689,7 +684,7 @@ export function AppProvider({ children }) {
         if (!permissionsRef.current.sendFiles) {
           throw new Error('Sending files disabled by desktop.');
         }
-        const sent = websocketService.sendFileTransfer({
+        const sent = await websocketService.sendFileTransfer({
           requestId: Crypto.randomUUID(),
           timestamp: Date.now(),
           deviceId: pairingData.deviceId,

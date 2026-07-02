@@ -4,6 +4,7 @@
     "slug": "openx-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "dark",
     "plugins": [
       [
@@ -27,6 +28,7 @@
     "android": {
       "package": "com.openx.mobile",
       "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
         "backgroundColor": "#070B14"
       },
       "predictiveBackGestureEnabled": false,
@@ -37,6 +39,12 @@
     "extra": {
       "eas": {
         "projectId": "a47c13bd-78f2-43f7-a225-c97ce99f417c"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.openx.mobile",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
       }
     }
   }

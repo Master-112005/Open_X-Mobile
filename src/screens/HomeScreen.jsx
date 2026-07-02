@@ -1,22 +1,49 @@
-import { useCallback, useRef } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatBubble from '../components/ChatBubble';
-import ConnectionStatus from '../components/ConnectionStatus';
-import FadeInView from '../components/FadeInView';
-import MessageInput from '../components/MessageInput';
-import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
-import { colors, spacing } from '../styles/theme';
+import { formatFileSize, pickTransferFile } from '../services/fileTransfer';
+import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
-export default function HomeScreen() {
+function FloatingButton({ label, onPress, accessibilityLabel }) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel || label}
+      accessibilityRole="button"
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [styles.floatButton, pressed && styles.floatPressed]}
+    >
+      <LinearGradient colors={gradients.glass} style={styles.floatGlass}>
+        <Text style={styles.floatText}>{label}</Text>
+      </LinearGradient>
+    </Pressable>
+  );
+}
+
+function ConnectionDot({ status }) {
+  const online = status === 'connected';
+  return (
+    <View style={styles.connectionPill}>
+      <View style={[styles.connectionDot, online ? styles.online : styles.offline]} />
+    </View>
+  );
+}
+
+export default function HomeScreen({ navigation }) {
   const {
     messages,
     connectionStatus,
@@ -27,8 +54,39 @@ export default function HomeScreen() {
     sessionLoaded,
     sessionValid,
     sendMessage,
+    sendFile,
   } = useApp();
+  const [text, setText] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectingFile, setSelectingFile] = useState(false);
+  const [sendingFile, setSendingFile] = useState(false);
   const listRef = useRef(null);
+  const insets = useSafeAreaInsets();
+
+  const commandRestriction = !pairingLoaded || !paired
+    ? 'Pair this phone with OpenX Desktop.'
+    : !permissionsLoaded
+      ? 'Checking desktop permissions.'
+      : !permissions.remoteCommands
+        ? 'Remote commands are disabled.'
+        : !sessionLoaded
+          ? 'Checking session.'
+          : !sessionValid
+            ? 'Session expired. Reconnect with QR.'
+            : null;
+
+  const canSendText = !commandRestriction && text.trim().length > 0;
+  const canSendFile = paired &&
+    permissionsLoaded &&
+    permissions.fileTransfer &&
+    permissions.sendFiles &&
+    sessionLoaded &&
+    sessionValid;
+
+  const composerHint = useMemo(() => {
+    if (selectedFile) return selectedFile.fileName;
+    return commandRestriction || 'Message OpenX';
+  }, [commandRestriction, selectedFile]);
 
   const scrollToNewest = useCallback(() => {
     requestAnimationFrame(() => {
@@ -36,92 +94,317 @@ export default function HomeScreen() {
     });
   }, []);
 
-  const commandRestriction = !pairingLoaded || !paired
-    ? 'Pair this device before sending commands.'
-    : !permissionsLoaded
-      ? 'Checking desktop permissions...'
-      : !permissions.remoteCommands
-        ? 'Remote commands disabled by desktop.'
-        : !sessionLoaded
-          ? 'Checking session...'
-          : !sessionValid
-            ? 'Session expired. Please reconnect.'
-            : null;
+  const handlePickFile = async () => {
+    if (!canSendFile) {
+      Alert.alert('File transfer unavailable', 'Reconnect and allow file transfer from desktop settings.');
+      return;
+    }
+    setSelectingFile(true);
+    try {
+      const file = await pickTransferFile();
+      if (file) setSelectedFile(file);
+    } catch (error) {
+      Alert.alert('Unable to select file', error.message);
+    } finally {
+      setSelectingFile(false);
+    }
+  };
+
+  const handleSend = async () => {
+    if (selectedFile) {
+      if (!canSendFile || sendingFile) return;
+      setSendingFile(true);
+      try {
+        await sendFile(selectedFile);
+        setSelectedFile(null);
+      } catch (error) {
+        Alert.alert('Transfer failed', error.message);
+      } finally {
+        setSendingFile(false);
+      }
+      return;
+    }
+
+    if (!canSendText) return;
+    if (sendMessage(text)) setText('');
+  };
 
   return (
-    <ScreenBackground>
-      <FadeInView style={styles.container}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.container}
-        >
-          <ConnectionStatus status={connectionStatus} />
-          <View style={styles.heading}>
-            <View style={styles.eyebrowChip}>
-              <View style={styles.eyebrowDot} />
-              <Text style={styles.eyebrow}>OPENX ASSISTANT</Text>
-            </View>
-            <Text style={styles.title}>What can I help with?</Text>
-            <Text style={styles.subtitle}>Your desktop, one message away.</Text>
+    <View style={styles.screen}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.screen}
+      >
+        <View style={[styles.topLayer, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
+          <View style={styles.leftCluster}>
+            <FloatingButton
+              accessibilityLabel="Open received files"
+              label="FILE"
+              onPress={() => navigation.navigate('Transfers')}
+            />
+            <ConnectionDot status={connectionStatus} />
           </View>
-          <FlatList
-            contentContainerStyle={styles.listContent}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled"
-            onContentSizeChange={scrollToNewest}
-            onLayout={scrollToNewest}
-            ref={listRef}
-            renderItem={({ item }) => <ChatBubble message={item} />}
-            showsVerticalScrollIndicator={false}
-            style={styles.list}
-          />
-          <MessageInput
-            disabled={Boolean(commandRestriction)}
-            disabledMessage={commandRestriction}
-            onSend={sendMessage}
-          />
-        </KeyboardAvoidingView>
-      </FadeInView>
-    </ScreenBackground>
+          <View style={styles.rightCluster}>
+            <FloatingButton
+              accessibilityLabel="Open QR scanner"
+              label="QR"
+              onPress={() => navigation.navigate('QRPairing')}
+            />
+            <FloatingButton
+              accessibilityLabel="Open settings"
+              label="SET"
+              onPress={() => navigation.navigate('Settings')}
+            />
+          </View>
+        </View>
+
+        <FlatList
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingTop: insets.top + 76, paddingBottom: spacing.xl },
+          ]}
+          data={messages}
+          keyExtractor={(item) => item.id}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={scrollToNewest}
+          onLayout={scrollToNewest}
+          ref={listRef}
+          renderItem={({ item }) => <ChatBubble message={item} />}
+          showsVerticalScrollIndicator={false}
+          style={styles.list}
+        />
+
+        <View style={[styles.composerWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
+          <LinearGradient colors={gradients.glass} style={styles.composer}>
+            <Pressable
+              accessibilityLabel="Add file"
+              accessibilityRole="button"
+              disabled={selectingFile || sendingFile}
+              onPress={handlePickFile}
+              style={({ pressed }) => [
+                styles.addButton,
+                pressed && styles.smallPressed,
+                (selectingFile || sendingFile) && styles.disabled,
+              ]}
+            >
+              <Text style={styles.addText}>+</Text>
+            </Pressable>
+            <View style={styles.inputStack}>
+              {selectedFile ? (
+                <View style={styles.fileChip}>
+                  <Text numberOfLines={1} style={styles.fileName}>{selectedFile.fileName}</Text>
+                  <Text style={styles.fileSize}>{formatFileSize(selectedFile.fileSize)}</Text>
+                  <Pressable
+                    accessibilityLabel="Remove selected file"
+                    accessibilityRole="button"
+                    disabled={sendingFile}
+                    onPress={() => setSelectedFile(null)}
+                    style={styles.clearFile}
+                  >
+                    <Text style={styles.clearFileText}>X</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <TextInput
+                  accessibilityLabel="Message OpenX"
+                  editable={!commandRestriction}
+                  maxLength={1000}
+                  multiline
+                  onChangeText={setText}
+                  onSubmitEditing={handleSend}
+                  placeholder={composerHint}
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="send"
+                  style={styles.input}
+                  submitBehavior="submit"
+                  value={text}
+                />
+              )}
+            </View>
+            <Pressable
+              accessibilityLabel={selectedFile ? 'Send file' : 'Send message'}
+              accessibilityRole="button"
+              disabled={selectedFile ? !canSendFile || sendingFile : !canSendText}
+              onPress={handleSend}
+              style={({ pressed }) => [
+                styles.sendButton,
+                pressed && styles.smallPressed,
+                (selectedFile ? !canSendFile || sendingFile : !canSendText) && styles.disabled,
+              ]}
+            >
+              <Text style={styles.sendText}>{selectedFile ? 'UP' : 'GO'}</Text>
+            </Pressable>
+          </LinearGradient>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  heading: {
+  screen: {
+    backgroundColor: colors.background,
+    flex: 1,
+  },
+  topLayer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 0,
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
-    paddingTop: spacing.sm,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 20,
   },
-  eyebrowChip: { alignItems: 'center', flexDirection: 'row' },
-  eyebrowDot: {
-    backgroundColor: colors.accent,
-    borderRadius: 999,
-    height: 6,
-    marginRight: spacing.sm,
-    width: 6,
+  leftCluster: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
-  eyebrow: {
-    color: colors.accent,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.6,
+  rightCluster: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
-  title: {
+  floatButton: {
+    borderRadius: radius.round,
+    height: 52,
+    overflow: 'hidden',
+    width: 52,
+  },
+  floatGlass: {
+    ...shadows.card,
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  floatText: {
     color: colors.text,
-    fontSize: 27,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-    marginTop: spacing.sm,
+    fontSize: 10,
+    fontWeight: '900',
   },
-  subtitle: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
+  floatPressed: {
+    opacity: 0.82,
+    transform: [{ scale: 0.96 }],
+  },
+  connectionPill: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  connectionDot: {
+    borderRadius: radius.round,
+    height: 9,
+    width: 9,
+  },
+  online: { backgroundColor: colors.success },
+  offline: { backgroundColor: colors.danger },
   list: { flex: 1 },
   listContent: {
     flexGrow: 1,
     justifyContent: 'flex-end',
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+  },
+  composerWrap: {
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  composer: {
+    ...shadows.card,
+    alignItems: 'flex-end',
+    borderColor: colors.border,
+    borderRadius: 28,
+    borderWidth: 1,
+    flexDirection: 'row',
+    minHeight: 58,
+    padding: 6,
+  },
+  addButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderRadius: radius.round,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
+  addText: {
+    color: colors.text,
+    fontSize: 25,
+    fontWeight: '600',
+    lineHeight: 29,
+  },
+  inputStack: {
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  input: {
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 21,
+    maxHeight: 112,
+    minHeight: 42,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    textAlignVertical: 'top',
+  },
+  sendButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
+  sendText: {
+    color: colors.text,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  smallPressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.94 }],
+  },
+  disabled: { opacity: 0.42 },
+  fileChip: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
+  },
+  fileName: {
+    color: colors.text,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  fileSize: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  clearFile: {
+    alignItems: 'center',
+    borderRadius: radius.round,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  clearFileText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '900',
   },
 });

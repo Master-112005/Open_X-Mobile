@@ -1,19 +1,25 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
 
-import { colors } from '../styles/theme';
+import { colors, gradients } from '../styles/theme';
 
 export default function ScreenBackground({ children, style }) {
   return (
     <View style={[styles.container, style]}>
       <LinearGradient
-        colors={[colors.background, colors.backgroundAlt, colors.background]}
+        colors={gradients.appBackground}
         end={{ x: 1, y: 1 }}
         start={{ x: 0, y: 0 }}
         style={StyleSheet.absoluteFill}
       />
-      <View pointerEvents="none" style={[styles.glow, styles.glowTop]} />
-      <View pointerEvents="none" style={[styles.glow, styles.glowBottom]} />
+      <LinearGradient
+        colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+        end={{ x: 0.8, y: 1 }}
+        pointerEvents="none"
+        start={{ x: 0.2, y: 0 }}
+        style={styles.topVeil}
+      />
+      <View pointerEvents="none" style={styles.bottomShade} />
       {children}
     </View>
   );
@@ -21,23 +27,13 @@ export default function ScreenBackground({ children, style }) {
 
 const styles = StyleSheet.create({
   container: { backgroundColor: colors.background, flex: 1, overflow: 'hidden' },
-  glow: {
-    borderRadius: 999,
-    opacity: 0.12,
+  topVeil: { height: '48%', left: 0, position: 'absolute', right: 0, top: 0 },
+  bottomShade: {
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+    bottom: 0,
+    height: '42%',
+    left: 0,
     position: 'absolute',
-  },
-  glowTop: {
-    backgroundColor: colors.primary,
-    height: 260,
-    right: -150,
-    top: -110,
-    width: 260,
-  },
-  glowBottom: {
-    backgroundColor: colors.accent,
-    bottom: -180,
-    height: 300,
-    left: -190,
-    width: 300,
+    right: 0,
   },
 });

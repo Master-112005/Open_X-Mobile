@@ -1,10 +1,8 @@
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { StyleSheet } from 'react-native';
 
 import HomeScreen from '../screens/HomeScreen';
-import PairDeviceScreen from '../screens/PairDeviceScreen';
 import QRPairingScreen from '../screens/QRPairingScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import TransfersScreen from '../screens/TransfersScreen';
@@ -31,49 +29,22 @@ export default function AppNavigator() {
       <Stack.Navigator
         screenOptions={{
           contentStyle: styles.content,
+          headerShown: false,
           headerShadowVisible: false,
-          headerStyle: styles.header,
           headerTintColor: colors.text,
-          headerTitleStyle: styles.headerTitle,
-          animation: 'slide_from_right',
+          animation: 'fade_from_bottom',
           gestureEnabled: true,
         }}
       >
         <Stack.Screen
           component={HomeScreen}
           name="Home"
-          options={({ navigation }) => ({
-            headerTitle: 'OpenX',
-            headerRight: () => (
-              <Pressable
-                accessibilityLabel="Open settings"
-                accessibilityRole="button"
-                hitSlop={10}
-                onPress={() => navigation.navigate('Settings')}
-                style={({ pressed }) => [
-                  styles.settingsButton,
-                  pressed && styles.buttonPressed,
-                ]}
-              >
-                <LinearGradient
-                  colors={[colors.surfaceElevated, colors.surface]}
-                  style={styles.settingsGradient}
-                >
-                  <Text style={styles.settingsIcon}>{'\u2699'}</Text>
-                </LinearGradient>
-              </Pressable>
-            ),
-          })}
+          options={{ title: 'OpenX' }}
         />
         <Stack.Screen
           component={SettingsScreen}
           name="Settings"
           options={{ headerTitle: 'Settings' }}
-        />
-        <Stack.Screen
-          component={PairDeviceScreen}
-          name="PairDevice"
-          options={{ headerTitle: 'Pair Device' }}
         />
         <Stack.Screen
           component={QRPairingScreen}
@@ -92,22 +63,4 @@ export default function AppNavigator() {
 
 const styles = StyleSheet.create({
   content: { backgroundColor: colors.background },
-  header: { backgroundColor: colors.backgroundAlt },
-  headerTitle: { fontSize: 19, fontWeight: '800', letterSpacing: -0.3 },
-  settingsButton: {
-    borderRadius: 12,
-    height: 38,
-    overflow: 'hidden',
-    width: 38,
-  },
-  settingsGradient: {
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: 12,
-    borderWidth: 1,
-    flex: 1,
-    justifyContent: 'center',
-  },
-  buttonPressed: { opacity: 0.7 },
-  settingsIcon: { color: colors.textSecondary, fontSize: 18 },
 });
