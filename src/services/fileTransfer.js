@@ -14,7 +14,8 @@ const createId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 const sanitizeFileName = (fileName) => {
-  const leafName = fileName.split(/[\\/]/).pop() || 'received-file';
+  const sourceName = String(fileName || '').trim();
+  const leafName = sourceName.split(/[\\/]/).pop() || 'received-file';
   const sanitized = leafName.replace(/[^a-zA-Z0-9._() -]/g, '_').slice(0, 120);
   return sanitized || 'received-file';
 };
@@ -74,14 +75,14 @@ export async function pickTransferFile() {
     if (!info.exists || info.isDirectory) {
       throw new Error('Unable to access the selected file.');
     }
-    fileSize = info.size;
+    fileSize = Number(info.size);
   }
 
   assertFileSize(fileSize);
 
   return {
     uri: asset.uri,
-    fileName: sanitizeFileName(asset.name),
+    fileName: sanitizeFileName(asset.name || asset.uri),
     fileSize,
     mimeType: asset.mimeType || 'application/octet-stream',
   };

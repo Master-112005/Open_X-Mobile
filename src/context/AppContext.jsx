@@ -307,7 +307,7 @@ export function AppProvider({ children }) {
           return;
         }
 
-        if (message.type === 'incoming-file') {
+        if (message.type === 'incoming-file' || message.type === 'file-transfer') {
           if (!pairingDataRef.current.paired) {
             const errorMessage = 'Pair device before transferring files.';
             recordTransfer(

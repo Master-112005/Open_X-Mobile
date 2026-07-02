@@ -4,6 +4,7 @@ const FILE_TRANSFER_CHUNK_BYTES = 256 * 1024;
 const FILE_TRANSFER_CHUNK_BASE64_LENGTH = Math.ceil(FILE_TRANSFER_CHUNK_BYTES / 3) * 4;
 const FILE_TRANSFER_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const FILE_TRANSFER_DRAIN_DELAY_MS = 8;
+const FILE_TRANSFER_ACK_TIMEOUT_MS = 30000;
 const WAITING_FOR_DESKTOP_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const CONNECTION_STATES = new Set([
@@ -33,6 +34,7 @@ class OpenXWebSocketService {
   manuallyDisconnected = true;
   statusListeners = new Set();
   messageListeners = new Set();
+  recentTransferErrors = new Map();
 
   connect(host, port) {
     return this.open(host, port, false);
@@ -246,6 +248,7 @@ class OpenXWebSocketService {
         1,
         Math.ceil(data.length / FILE_TRANSFER_CHUNK_BASE64_LENGTH),
       );
+      const startedPromise = this.waitForTransferMessage(transferId, ['file-transfer-started']);
 
       this.sendJson({
         type: 'file-transfer-start',
@@ -260,6 +263,7 @@ class OpenXWebSocketService {
         hash,
         chunkCount,
       });
+      await startedPromise;
 
       for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
         const offset = chunkIndex * FILE_TRANSFER_CHUNK_BASE64_LENGTH;
@@ -275,8 +279,11 @@ class OpenXWebSocketService {
           data: chunk,
         });
         await this.waitForSocketDrain();
+        this.throwRememberedTransferError(transferId);
       }
 
+      this.throwRememberedTransferError(transferId);
+      const successPromise = this.waitForTransferMessage(transferId, ['file-transfer-success']);
       this.sendJson({
         type: 'file-transfer-complete',
         requestId: `${requestId}:complete`,
@@ -285,12 +292,58 @@ class OpenXWebSocketService {
         deviceId,
         sessionToken,
       });
+      await successPromise;
+      this.recentTransferErrors.delete(transferId);
       return true;
-    } catch {
+    } catch (error) {
       this.setStatus('error');
-      this.socket.close();
-      return false;
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.close();
+      }
+      throw error;
     }
+  }
+
+  waitForTransferMessage(transferId, expectedTypes) {
+    const expected = new Set(expectedTypes);
+    return new Promise((resolve, reject) => {
+      const rememberedError = this.recentTransferErrors.get(transferId);
+      if (rememberedError) {
+        this.recentTransferErrors.delete(transferId);
+        reject(new Error(rememberedError));
+        return;
+      }
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.messageListeners.delete(listener);
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('File transfer timed out. Reconnect and try again.'));
+      }, FILE_TRANSFER_ACK_TIMEOUT_MS);
+      const listener = (message) => {
+        const messageTransferId = String(message?.transferId || '').trim();
+        if (messageTransferId && messageTransferId !== transferId) return;
+        if (message.type === 'error') {
+          cleanup();
+          this.recentTransferErrors.delete(transferId);
+          reject(new Error(message.message || 'File transfer failed.'));
+          return;
+        }
+        if (!expected.has(message.type)) return;
+        cleanup();
+        resolve(message);
+      };
+
+      this.messageListeners.add(listener);
+    });
+  }
+
+  throwRememberedTransferError(transferId) {
+    const rememberedError = this.recentTransferErrors.get(transferId);
+    if (!rememberedError) return;
+    this.recentTransferErrors.delete(transferId);
+    throw new Error(rememberedError);
   }
 
   sendJson(payload) {
@@ -309,6 +362,10 @@ class OpenXWebSocketService {
       Number(this.socket?.bufferedAmount || 0) > FILE_TRANSFER_MAX_BUFFERED_BYTES
     ) {
       await sleep(FILE_TRANSFER_DRAIN_DELAY_MS);
+    }
+
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      throw new Error('Desktop connection closed during file transfer.');
     }
   }
 
@@ -355,6 +412,7 @@ class OpenXWebSocketService {
         message.type === 'pair-success' ||
         message.type === 'pair-failed' ||
         message.type === 'incoming-file' ||
+        message.type === 'file-transfer' ||
         message.type === 'file-transfer-started' ||
         message.type === 'file-transfer-progress' ||
         message.type === 'file-transfer-success' ||
@@ -366,6 +424,12 @@ class OpenXWebSocketService {
         message.type === 'auth-failed' ||
         message.type === 'auth-failure'
       ) {
+        if (message.type === 'error' && message.transferId) {
+          this.recentTransferErrors.set(
+            String(message.transferId),
+            message.message || 'File transfer failed.',
+          );
+        }
         this.messageListeners.forEach((listener) => listener(message));
       }
     } catch {
