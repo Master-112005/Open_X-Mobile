@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
@@ -23,15 +24,15 @@ const formatTimestamp = (timestamp) =>
     minute: '2-digit',
   }).format(new Date(timestamp));
 
-function HeaderButton({ label, onPress }) {
+function HeaderButton({ accessibilityLabel, iconName, onPress }) {
   return (
     <Pressable
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
     >
-      <Text style={styles.headerButtonText}>{label}</Text>
+      <Ionicons color={colors.text} name={iconName} size={22} />
     </Pressable>
   );
 }
@@ -40,7 +41,7 @@ function FileRow({ item }) {
   return (
     <GlassPanel style={styles.row} contentStyle={styles.rowContent}>
       <View style={styles.fileMark}>
-        <Text style={styles.fileMarkText}>FILE</Text>
+        <Ionicons color={colors.text} name="document-outline" size={22} />
       </View>
       <View style={styles.fileCopy}>
         <Text numberOfLines={1} style={styles.fileName}>{item.fileName}</Text>
@@ -80,8 +81,16 @@ export default function TransfersScreen({ navigation }) {
   return (
     <View style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <HeaderButton label="BACK" onPress={() => navigation.goBack()} />
-        <HeaderButton label="QR" onPress={() => navigation.navigate('QRPairing')} />
+        <HeaderButton
+          accessibilityLabel="Go back"
+          iconName="chevron-back"
+          onPress={() => navigation.goBack()}
+        />
+        <HeaderButton
+          accessibilityLabel="Open QR scanner"
+          iconName="qr-code-outline"
+          onPress={() => navigation.navigate('QRPairing')}
+        />
       </View>
 
       <View style={[styles.titleBlock, { paddingTop: insets.top + 88 }]}>
@@ -135,11 +144,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 52,
   },
-  headerButtonText: {
-    color: colors.text,
-    fontSize: 10,
-    fontWeight: '900',
-  },
   pressed: {
     opacity: 0.78,
     transform: [{ scale: 0.96 }],
@@ -180,11 +184,6 @@ const styles = StyleSheet.create({
     height: 48,
     justifyContent: 'center',
     width: 48,
-  },
-  fileMarkText: {
-    color: colors.text,
-    fontSize: 9,
-    fontWeight: '900',
   },
   fileCopy: {
     flex: 1,

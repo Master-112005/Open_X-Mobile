@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,15 +27,15 @@ const PERMISSION_ITEMS = [
   { key: 'powerActions', label: 'Power actions' },
 ];
 
-function HeaderButton({ label, onPress }) {
+function HeaderButton({ accessibilityLabel, iconName, onPress }) {
   return (
     <Pressable
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
     >
-      <Text style={styles.headerButtonText}>{label}</Text>
+      <Ionicons color={colors.text} name={iconName} size={22} />
     </Pressable>
   );
 }
@@ -108,8 +109,16 @@ export default function SettingsScreen({ navigation }) {
         style={styles.screen}
       >
         <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-          <HeaderButton label="BACK" onPress={() => navigation.goBack()} />
-          <HeaderButton label="QR" onPress={() => navigation.navigate('QRPairing')} />
+          <HeaderButton
+            accessibilityLabel="Go back"
+            iconName="chevron-back"
+            onPress={() => navigation.goBack()}
+          />
+          <HeaderButton
+            accessibilityLabel="Open QR scanner"
+            iconName="qr-code-outline"
+            onPress={() => navigation.navigate('QRPairing')}
+          />
         </View>
 
         <ScrollView
@@ -177,6 +186,7 @@ export default function SettingsScreen({ navigation }) {
                 <View style={styles.buttonRow}>
                   <GlassButton
                     disabled={testing || saving}
+                    iconName="pulse-outline"
                     label="Test"
                     loading={testing}
                     onPress={handleTestConnection}
@@ -184,6 +194,7 @@ export default function SettingsScreen({ navigation }) {
                   />
                   <GlassButton
                     disabled={saving || testing}
+                    iconName="save-outline"
                     label="Save"
                     loading={saving}
                     onPress={handleSave}
@@ -230,11 +241,6 @@ const styles = StyleSheet.create({
     height: 52,
     justifyContent: 'center',
     width: 52,
-  },
-  headerButtonText: {
-    color: colors.text,
-    fontSize: 10,
-    fontWeight: '900',
   },
   pressed: {
     opacity: 0.78,

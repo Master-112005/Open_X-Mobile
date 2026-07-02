@@ -50,7 +50,7 @@ const parseStoredObject = (value) => {
   }
 };
 
-const createMessage = (role, text, timestamp = Date.now()) => {
+const createMessage = (role, text, timestamp = Date.now(), metadata = {}) => {
   const parsedTimestamp = new Date(timestamp);
 
   return {
@@ -60,6 +60,7 @@ const createMessage = (role, text, timestamp = Date.now()) => {
     timestamp: Number.isNaN(parsedTimestamp.getTime())
       ? new Date().toISOString()
       : parsedTimestamp.toISOString(),
+    ...metadata,
   };
 };
 
@@ -422,7 +423,13 @@ export function AppProvider({ children }) {
 
         setMessages((current) => [
           ...current,
-          createMessage('assistant', responseText, message.timestamp),
+          createMessage('assistant', responseText, message.timestamp, {
+            intent: message.intent || null,
+            data: message.data || null,
+            entities: message.entities || null,
+            choices: Array.isArray(message.data?.choices) ? message.data.choices : [],
+            needsClarification: message.needsClarification === true,
+          }),
         ]);
       },
     );

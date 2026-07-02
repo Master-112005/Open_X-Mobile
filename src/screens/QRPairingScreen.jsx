@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -133,7 +134,7 @@ export default function QRPairingScreen({ navigation, route }) {
             contentStyle={styles.permissionPanelContent}
           >
             <View style={styles.cameraIcon}>
-              <Text style={styles.cameraIconText}>QR</Text>
+              <Ionicons color={colors.text} name="qr-code-outline" size={34} />
             </View>
             <Text style={styles.permissionTitle}>Camera access required</Text>
             <Text style={styles.permissionText}>
@@ -141,14 +142,14 @@ export default function QRPairingScreen({ navigation, route }) {
               OpenX Desktop.
             </Text>
             <GlassButton
-              icon="CAM"
+              iconName="camera-outline"
               label="Allow camera"
               onPress={requestPermission}
               style={styles.permissionButton}
               tone="primary"
             />
             <GlassButton
-              icon="BACK"
+              iconName="chevron-back"
               label="Cancel"
               onPress={() => navigation.goBack()}
               style={styles.permissionButton}
@@ -252,12 +253,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: spacing.xl,
     width: 72,
-  },
-  cameraIconText: {
-    color: colors.primary,
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 1,
   },
   permissionTitle: { color: colors.text, fontSize: 24, fontWeight: '700' },
   permissionText: {

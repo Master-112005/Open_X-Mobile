@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
@@ -18,7 +19,7 @@ import { useApp } from '../context/AppContext';
 import { formatFileSize, pickTransferFile } from '../services/fileTransfer';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
-function FloatingButton({ label, onPress, accessibilityLabel }) {
+function FloatingButton({ iconName, label, onPress, accessibilityLabel }) {
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel || label}
@@ -28,7 +29,7 @@ function FloatingButton({ label, onPress, accessibilityLabel }) {
       style={({ pressed }) => [styles.floatButton, pressed && styles.floatPressed]}
     >
       <LinearGradient colors={gradients.glass} style={styles.floatGlass}>
-        <Text style={styles.floatText}>{label}</Text>
+        <Ionicons color={colors.text} name={iconName} size={22} />
       </LinearGradient>
     </Pressable>
   );
@@ -129,17 +130,25 @@ export default function HomeScreen({ navigation }) {
     if (sendMessage(text)) setText('');
   };
 
+  const handleChoice = useCallback((value) => {
+    if (!commandRestriction && sendMessage(value)) {
+      scrollToNewest();
+    }
+  }, [commandRestriction, scrollToNewest, sendMessage]);
+
   return (
     <View style={styles.screen}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
         style={styles.screen}
       >
         <View style={[styles.topLayer, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
           <View style={styles.leftCluster}>
             <FloatingButton
               accessibilityLabel="Open received files"
-              label="FILE"
+              iconName="folder-open-outline"
+              label="Files"
               onPress={() => navigation.navigate('Transfers')}
             />
             <ConnectionDot status={connectionStatus} />
@@ -147,12 +156,14 @@ export default function HomeScreen({ navigation }) {
           <View style={styles.rightCluster}>
             <FloatingButton
               accessibilityLabel="Open QR scanner"
-              label="QR"
+              iconName="qr-code-outline"
+              label="QR scanner"
               onPress={() => navigation.navigate('QRPairing')}
             />
             <FloatingButton
               accessibilityLabel="Open settings"
-              label="SET"
+              iconName="settings-outline"
+              label="Settings"
               onPress={() => navigation.navigate('Settings')}
             />
           </View>
@@ -170,12 +181,12 @@ export default function HomeScreen({ navigation }) {
           onContentSizeChange={scrollToNewest}
           onLayout={scrollToNewest}
           ref={listRef}
-          renderItem={({ item }) => <ChatBubble message={item} />}
+          renderItem={({ item }) => <ChatBubble message={item} onChoice={handleChoice} />}
           showsVerticalScrollIndicator={false}
           style={styles.list}
         />
 
-        <View style={[styles.composerWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
+        <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
           <LinearGradient colors={gradients.glass} style={styles.composer}>
             <Pressable
               accessibilityLabel="Add file"
@@ -188,7 +199,7 @@ export default function HomeScreen({ navigation }) {
                 (selectingFile || sendingFile) && styles.disabled,
               ]}
             >
-              <Text style={styles.addText}>+</Text>
+              <Ionicons color={colors.text} name="add" size={26} />
             </Pressable>
             <View style={styles.inputStack}>
               {selectedFile ? (
@@ -202,7 +213,7 @@ export default function HomeScreen({ navigation }) {
                     onPress={() => setSelectedFile(null)}
                     style={styles.clearFile}
                   >
-                    <Text style={styles.clearFileText}>X</Text>
+                    <Ionicons color={colors.textSecondary} name="close" size={18} />
                   </Pressable>
                 </View>
               ) : (
@@ -233,7 +244,11 @@ export default function HomeScreen({ navigation }) {
                 (selectedFile ? !canSendFile || sendingFile : !canSendText) && styles.disabled,
               ]}
             >
-              <Text style={styles.sendText}>{selectedFile ? 'UP' : 'GO'}</Text>
+              <Ionicons
+                color={colors.text}
+                name={selectedFile ? 'cloud-upload-outline' : 'send'}
+                size={20}
+              />
             </Pressable>
           </LinearGradient>
         </View>
@@ -280,11 +295,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flex: 1,
     justifyContent: 'center',
-  },
-  floatText: {
-    color: colors.text,
-    fontSize: 10,
-    fontWeight: '900',
   },
   floatPressed: {
     opacity: 0.82,
@@ -336,12 +346,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 46,
   },
-  addText: {
-    color: colors.text,
-    fontSize: 25,
-    fontWeight: '600',
-    lineHeight: 29,
-  },
   inputStack: {
     flex: 1,
     justifyContent: 'center',
@@ -366,11 +370,6 @@ const styles = StyleSheet.create({
     height: 46,
     justifyContent: 'center',
     width: 46,
-  },
-  sendText: {
-    color: colors.text,
-    fontSize: 10,
-    fontWeight: '900',
   },
   smallPressed: {
     opacity: 0.78,
@@ -401,10 +400,5 @@ const styles = StyleSheet.create({
     height: 30,
     justifyContent: 'center',
     width: 30,
-  },
-  clearFileText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '900',
   },
 });

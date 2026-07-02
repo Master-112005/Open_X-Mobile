@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -14,6 +15,7 @@ export default function GlassButton({
   accessibilityLabel,
   disabled = false,
   icon,
+  iconName,
   label,
   loading = false,
   onPress,
@@ -22,6 +24,7 @@ export default function GlassButton({
 }) {
   const gradient = toneGradients[tone] || toneGradients.secondary;
   const primary = tone === 'primary';
+  const resolvedIconName = iconName || icon;
 
   return (
     <Pressable
@@ -46,11 +49,13 @@ export default function GlassButton({
           <ActivityIndicator color={primary ? colors.white : colors.primary} />
         ) : (
           <>
-            {icon ? (
+            {resolvedIconName ? (
               <View style={[styles.iconShell, primary && styles.primaryIconShell]}>
-                <Text style={[styles.iconText, primary && styles.primaryIconText]}>
-                  {icon}
-                </Text>
+                <Ionicons
+                  color={primary ? colors.white : colors.text}
+                  name={resolvedIconName}
+                  size={16}
+                />
               </View>
             ) : null}
             <Text style={[styles.label, primary && styles.primaryLabel]}>
@@ -104,14 +109,6 @@ const styles = StyleSheet.create({
   primaryIconShell: {
     backgroundColor: 'rgba(255,255,255,0.15)',
     borderColor: 'rgba(255,255,255,0.2)',
-  },
-  iconText: {
-    color: colors.primary,
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  primaryIconText: {
-    color: colors.white,
   },
   label: {
     color: colors.text,
