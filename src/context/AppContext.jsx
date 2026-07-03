@@ -309,8 +309,23 @@ export function AppProvider({ children }) {
         }
 
         if (message.type === 'incoming-file' || message.type === 'file-transfer') {
+          const transferId = message.transferId || message.requestId || null;
+          const sendReceipt = ({ success, error = null }) => {
+            websocketService.sendTransferReceipt({
+              transferId,
+              requestId: transferId,
+              timestamp: Date.now(),
+              deviceId: pairingDataRef.current.deviceId,
+              sessionToken: sessionRef.current.sessionToken,
+              fileName: message.fileName,
+              success,
+              error,
+            });
+          };
+
           if (!pairingDataRef.current.paired) {
             const errorMessage = 'Pair device before transferring files.';
+            sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
               createTransferRecord({
                 direction: 'received',
@@ -330,6 +345,7 @@ export function AppProvider({ children }) {
 
           if (!isSessionValid(sessionRef.current)) {
             const errorMessage = 'Session expired. Please reconnect.';
+            sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
               createTransferRecord({
                 direction: 'received',
@@ -349,6 +365,7 @@ export function AppProvider({ children }) {
 
           if (!permissionsRef.current.fileTransfer) {
             const errorMessage = 'File transfers disabled by desktop.';
+            sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
               createTransferRecord({
                 direction: 'received',
@@ -368,6 +385,7 @@ export function AppProvider({ children }) {
 
           if (!permissionsRef.current.receiveFiles) {
             const errorMessage = 'Receiving files disabled by desktop.';
+            sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
               createTransferRecord({
                 direction: 'received',
@@ -387,6 +405,7 @@ export function AppProvider({ children }) {
 
           storeIncomingFile(message)
             .then((record) => {
+              sendReceipt({ success: true });
               if (!mounted) return;
               recordTransfer(record);
               setLastTransferEvent({
@@ -396,6 +415,7 @@ export function AppProvider({ children }) {
               });
             })
             .catch((error) => {
+              sendReceipt({ success: false, error: error.message });
               if (!mounted) return;
               recordTransfer(
                 createTransferRecord({

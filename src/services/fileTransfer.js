@@ -13,6 +13,9 @@ const RECEIVED_DIRECTORY_NAME = 'received-files';
 const createId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
+const createShortSuffix = () =>
+  `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
 const sanitizeFileName = (fileName) => {
   const sourceName = String(fileName || '').trim();
   const leafName = sourceName.split(/[\\/]/).pop() || 'received-file';
@@ -25,10 +28,10 @@ const createUniqueFileName = (fileName) => {
   const extensionIndex = safeName.lastIndexOf('.');
 
   if (extensionIndex <= 0) {
-    return `${safeName}-${Date.now()}`;
+    return `${safeName}-${createShortSuffix()}`;
   }
 
-  return `${safeName.slice(0, extensionIndex)}-${Date.now()}${safeName.slice(extensionIndex)}`;
+  return `${safeName.slice(0, extensionIndex)}-${createShortSuffix()}${safeName.slice(extensionIndex)}`;
 };
 
 const getBase64ByteLength = (data) => {
@@ -145,6 +148,7 @@ export async function storeIncomingFile(payload) {
 
   if (
     actualSize !== declaredSize ||
+    data.length % 4 !== 0 ||
     !/^[a-zA-Z0-9+/]*={0,2}$/.test(data)
   ) {
     throw new Error('Invalid incoming file payload.');

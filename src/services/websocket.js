@@ -5,6 +5,7 @@ const FILE_TRANSFER_CHUNK_BASE64_LENGTH = Math.ceil(FILE_TRANSFER_CHUNK_BYTES / 
 const FILE_TRANSFER_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const FILE_TRANSFER_DRAIN_DELAY_MS = 8;
 const FILE_TRANSFER_ACK_TIMEOUT_MS = 30000;
+const MAX_REMEMBERED_TRANSFER_ERRORS = 50;
 const WAITING_FOR_DESKTOP_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const CONNECTION_STATES = new Set([
@@ -23,6 +24,8 @@ const normalizeHost = (host) =>
     .replace(/:\d+$/, '');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const normalizeTransferId = (value) => String(value || '').trim();
 
 class OpenXWebSocketService {
   socket = null;
@@ -143,6 +146,7 @@ class OpenXWebSocketService {
     this.manuallyDisconnected = true;
     this.clearReconnectTimer();
     this.clearConnectTimeout();
+    this.recentTransferErrors.clear();
     this.closeCurrentSocket();
     this.setStatus('disconnected');
   }
@@ -296,10 +300,7 @@ class OpenXWebSocketService {
       this.recentTransferErrors.delete(transferId);
       return true;
     } catch (error) {
-      this.setStatus('error');
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.close();
-      }
+      if (this.socket?.readyState !== WebSocket.OPEN) this.setStatus('error');
       throw error;
     }
   }
@@ -322,9 +323,10 @@ class OpenXWebSocketService {
         reject(new Error('File transfer timed out. Reconnect and try again.'));
       }, FILE_TRANSFER_ACK_TIMEOUT_MS);
       const listener = (message) => {
-        const messageTransferId = String(message?.transferId || '').trim();
+        const messageTransferId = normalizeTransferId(message?.transferId);
         if (messageTransferId && messageTransferId !== transferId) return;
         if (message.type === 'error') {
+          if (!messageTransferId) return;
           cleanup();
           this.recentTransferErrors.delete(transferId);
           reject(new Error(message.message || 'File transfer failed.'));
@@ -346,6 +348,18 @@ class OpenXWebSocketService {
     throw new Error(rememberedError);
   }
 
+  rememberTransferError(transferId, message) {
+    const normalizedTransferId = normalizeTransferId(transferId);
+    if (!normalizedTransferId) return;
+    this.recentTransferErrors.delete(normalizedTransferId);
+    this.recentTransferErrors.set(normalizedTransferId, message);
+    while (this.recentTransferErrors.size > MAX_REMEMBERED_TRANSFER_ERRORS) {
+      const oldestTransferId = this.recentTransferErrors.keys().next().value;
+      if (!oldestTransferId) break;
+      this.recentTransferErrors.delete(oldestTransferId);
+    }
+  }
+
   sendJson(payload) {
     if (
       this.status !== 'connected' ||
@@ -354,6 +368,45 @@ class OpenXWebSocketService {
       throw new Error('Desktop connection is not open.');
     }
     this.socket.send(JSON.stringify(payload));
+  }
+
+  sendTransferReceipt({
+    transferId,
+    requestId,
+    timestamp = Date.now(),
+    deviceId,
+    sessionToken,
+    fileName,
+    success,
+    error = null,
+  }) {
+    const normalizedTransferId = normalizeTransferId(transferId || requestId);
+    if (
+      !normalizedTransferId ||
+      !deviceId ||
+      !sessionToken ||
+      this.status !== 'connected' ||
+      this.socket?.readyState !== WebSocket.OPEN
+    ) {
+      return false;
+    }
+
+    try {
+      this.sendJson({
+        type: 'file-transfer-received',
+        requestId: requestId || normalizedTransferId,
+        transferId: normalizedTransferId,
+        timestamp,
+        deviceId,
+        sessionToken,
+        fileName,
+        success: success !== false,
+        error,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async waitForSocketDrain() {
@@ -425,8 +478,8 @@ class OpenXWebSocketService {
         message.type === 'auth-failure'
       ) {
         if (message.type === 'error' && message.transferId) {
-          this.recentTransferErrors.set(
-            String(message.transferId),
+          this.rememberTransferError(
+            normalizeTransferId(message.transferId),
             message.message || 'File transfer failed.',
           );
         }
