@@ -63,6 +63,7 @@ export default function HomeScreen({ navigation }) {
   const [sendingFile, setSendingFile] = useState(false);
   const listRef = useRef(null);
   const insets = useSafeAreaInsets();
+  const topControlsHeight = insets.top + spacing.sm + 52 + spacing.lg;
 
   const commandRestriction = !pairingLoaded || !paired
     ? 'Pair this phone with OpenX Desktop.'
@@ -172,7 +173,7 @@ export default function HomeScreen({ navigation }) {
         <FlatList
           contentContainerStyle={[
             styles.listContent,
-            { paddingTop: insets.top + 76, paddingBottom: spacing.xl },
+            { paddingTop: topControlsHeight + spacing.md, paddingBottom: spacing.xl },
           ]}
           data={messages}
           keyExtractor={(item) => item.id}

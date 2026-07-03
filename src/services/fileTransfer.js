@@ -10,6 +10,13 @@ export const MAX_HISTORY_ITEMS = 100;
 const TRANSFER_HISTORY_KEY = '@openx/transfer-history';
 const RECEIVED_DIRECTORY_NAME = 'received-files';
 
+const getReceivedDirectoryUri = () => {
+  if (!FileSystem.documentDirectory) {
+    throw new Error('Local file storage is unavailable.');
+  }
+  return `${FileSystem.documentDirectory}${RECEIVED_DIRECTORY_NAME}/`;
+};
+
 const createId = () =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -154,11 +161,7 @@ export async function storeIncomingFile(payload) {
     throw new Error('Invalid incoming file payload.');
   }
 
-  if (!FileSystem.documentDirectory) {
-    throw new Error('Local file storage is unavailable.');
-  }
-
-  const directoryUri = `${FileSystem.documentDirectory}${RECEIVED_DIRECTORY_NAME}/`;
+  const directoryUri = getReceivedDirectoryUri();
   const directoryInfo = await FileSystem.getInfoAsync(directoryUri);
   if (!directoryInfo.exists) {
     await FileSystem.makeDirectoryAsync(directoryUri, { intermediates: true });
@@ -190,6 +193,21 @@ export async function storeIncomingFile(payload) {
     localUri,
     hash: expectedHash,
   });
+}
+
+export async function removeReceivedFile(record) {
+  const localUri = String(record?.localUri || '').trim();
+  if (!localUri) {
+    return false;
+  }
+
+  const receivedDirectoryUri = getReceivedDirectoryUri();
+  if (!localUri.startsWith(receivedDirectoryUri)) {
+    throw new Error('This file is outside OpenX received storage.');
+  }
+
+  await FileSystem.deleteAsync(localUri, { idempotent: true });
+  return true;
 }
 
 export function createTransferRecord({

@@ -5,6 +5,7 @@ import {
   loadTransferHistory,
   persistTransferHistory,
   prepareOutgoingFile,
+  removeReceivedFile,
   storeIncomingFile,
 } from '../services/fileTransfer';
 import {
@@ -749,6 +750,27 @@ export function AppProvider({ children }) {
     [recordTransfer],
   );
 
+  const deleteReceivedFile = useCallback(async (recordId) => {
+    const target = transferHistoryRef.current.find(
+      (item) => item.id === recordId,
+    );
+    if (!target) {
+      throw new Error('File record was not found.');
+    }
+
+    if (target.direction === 'received' && target.localUri) {
+      await removeReceivedFile(target);
+    }
+
+    const nextHistory = transferHistoryRef.current.filter(
+      (item) => item.id !== recordId,
+    );
+    transferHistoryRef.current = nextHistory;
+    setTransferHistory(nextHistory);
+    await persistTransferHistory(nextHistory);
+    return true;
+  }, []);
+
   const clearTransferEvent = useCallback(() => {
     setLastTransferEvent(null);
   }, []);
@@ -778,6 +800,7 @@ export function AppProvider({ children }) {
       testConnection,
       pairDevice,
       sendFile,
+      deleteReceivedFile,
       clearTransferEvent,
     }),
     [
@@ -804,6 +827,7 @@ export function AppProvider({ children }) {
       testConnection,
       pairDevice,
       sendFile,
+      deleteReceivedFile,
       clearTransferEvent,
     ],
   );

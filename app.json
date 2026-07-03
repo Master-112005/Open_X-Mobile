@@ -24,7 +24,8 @@
           "barcodeScannerEnabled": true
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-sharing"
     ],
     "android": {
       "package": "com.openx.mobile",
