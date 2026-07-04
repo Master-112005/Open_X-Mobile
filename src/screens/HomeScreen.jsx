@@ -71,7 +71,11 @@ export default function HomeScreen({ navigation }) {
     : connectionStatus;
 
   const commandRestriction = connectionMode === 'cloud'
-    ? 'Cloud relay is Phase 3 connection only.'
+    ? (!paired
+        ? 'Pair this phone with OpenX Desktop.'
+        : !cloudStatus?.connected
+          ? 'Connect to OpenX Relay.'
+          : null)
     : !pairingLoaded || !paired
       ? 'Pair this phone with OpenX Desktop.'
       : !permissionsLoaded
@@ -85,13 +89,14 @@ export default function HomeScreen({ navigation }) {
               : null;
 
   const canSendText = !commandRestriction && text.trim().length > 0;
-  const canSendFile = paired &&
-    connectionMode === 'local' &&
-    permissionsLoaded &&
-    permissions.fileTransfer &&
-    permissions.sendFiles &&
-    sessionLoaded &&
-    sessionValid;
+  const canSendFile = connectionMode === 'cloud'
+    ? paired && cloudStatus?.connected
+    : paired &&
+      permissionsLoaded &&
+      permissions.fileTransfer &&
+      permissions.sendFiles &&
+      sessionLoaded &&
+      sessionValid;
 
   const composerHint = useMemo(() => {
     if (selectedFile) return selectedFile.fileName;

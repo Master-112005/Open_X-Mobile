@@ -95,7 +95,7 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | Chat bubble | `src/components/ChatBubble.jsx` | Renders assistant/user messages, result cards, and selectable clarification choices |
 | Glass UI primitives | `src/components/GlassButton.jsx`, `src/components/GlassPanel.jsx`, `src/components/ScreenBackground.jsx`, `src/components/FadeInView.jsx` | Reusable theme-matching visual primitives and animation helpers |
 | WebSocket service | `src/services/websocket.js` | Local WebSocket lifecycle, reconnects, command sending, chunked file transfer, transfer acknowledgements, and message fanout |
-| Relay client | `src/services/relayClient.js` | Optional cloud relay WebSocket lifecycle, device registration, reconnects, status snapshots, timeout handling, cloud QR pairing, opaque relay packet hooks, and future auth placeholders |
+| Relay client | `src/services/relayClient.js` | Optional cloud relay WebSocket lifecycle, device registration, reconnects, status snapshots, timeout handling, cloud QR pairing, opaque relay packet hooks, cloud assistant command transport, cloud file transfer packet transport, presence, notifications, and future auth placeholders |
 | File transfer service | `src/services/fileTransfer.js` | File picking, size checks, base64 conversion, SHA-256 hashing, incoming file storage, deletion, and transfer history |
 | Permissions service | `src/services/permissions.js` | Normalizes and persists desktop-controlled phone permissions |
 | QR pairing parser | `src/services/qrPairing.js` | Validates local LAN QR payloads and cloud relay QR payloads with expiry checks |
@@ -147,6 +147,7 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | `connectCloud(settings)` | `src/context/AppContext.jsx` | Connects the mobile app to the relay server only. |
 | `disconnectCloud()` | `src/context/AppContext.jsx` | Manually disconnects from relay and stops cloud reconnect behavior. |
 | `pairCloudDevice(payload)` | `src/context/AppContext.jsx` | Switches to Cloud mode, sends a relay pair request, waits for desktop approval, and persists cloud pairing state. |
+| `cloudPresence` / `cloudNotifications` context values | `src/context/AppContext.jsx` | Expose relay presence and notification updates to mobile screens without affecting Local mode. |
 | `pairDevice(name, token)` | `src/context/AppContext.jsx` | Sends a pairing request and waits for desktop confirmation. |
 | `sendFile(file)` | `src/context/AppContext.jsx` | Validates permissions/session, prepares a file, and sends it to desktop. |
 | `deleteReceivedFile(recordId)` | `src/context/AppContext.jsx` | Deletes a stored received file and updates history. |
@@ -188,7 +189,19 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | `RelayClient.pairWithToken(payload)` | `src/services/relayClient.js` | Sends a cloud pair request to the relay and resolves only after desktop approval. |
 | `RelayClient.authenticate()` | `src/services/relayClient.js` | Placeholder for future relay authentication phases. |
 | `RelayClient.subscribeToStatus(listener)` | `src/services/relayClient.js` | Publishes connection state to Settings and Home UI. |
-| `RelayClient.subscribeToRelayPackets(listener)` | `src/services/relayClient.js` | Publishes `relay:packet`, `relay:ack`, and `relay:error` transport messages for future cloud features. |
+| `RelayClient.subscribeToRelayPackets(listener)` | `src/services/relayClient.js` | Publishes `relay:packet`, `relay:ack`, and `relay:error` transport messages for cloud command responses and future cloud features. |
+| `RelayClient.updatePresence(state, metadata)` | `src/services/relayClient.js` | Publishes phone cloud presence such as online, busy, idle, syncing, or sleeping. |
+| `RelayClient.subscribeToPresence(listener)` | `src/services/relayClient.js` | Publishes paired-device presence lists to the app context. |
+| `RelayClient.createNotification(payload)` | `src/services/relayClient.js` | Creates cloud notification records through the relay. |
+| `RelayClient.subscribeToNotifications(listener)` | `src/services/relayClient.js` | Publishes cloud notification lists to the app context. |
+| `RelayClient.markNotificationRead(notificationId)` | `src/services/relayClient.js` | Marks a cloud notification read. |
+| `RelayClient.dismissNotification(notificationId)` | `src/services/relayClient.js` | Dismisses a cloud notification. |
+| `sendMessage(text)` cloud branch | `src/context/AppContext.jsx` | Builds Phase 7 `assistant-command` packets, tracks request timeouts, and renders structured desktop assistant responses in mobile chat. |
+| `CloudFileTransferManager.sendFile(file)` | `src/services/cloudFileTransfer.js` | Sends cloud file metadata, waits for receiver approval, and uploads base64 chunks through relay packets. |
+| `CloudFileTransferManager.acceptTransfer(transferId)` | `src/services/cloudFileTransfer.js` | Accepts incoming cloud file metadata before chunk data is saved. |
+| `CloudFileTransferManager.handleChunk(packet, payload)` | `src/services/cloudFileTransfer.js` | Verifies chunk sequence/checksum and sends chunk acknowledgements. |
+| `CloudFileTransferManager.handleComplete(payload)` | `src/services/cloudFileTransfer.js` | Stores the verified incoming file with the existing mobile received-file storage flow. |
+| `sendFile(file)` cloud branch | `src/context/AppContext.jsx` | Uses the cloud file transfer manager when the app is in Cloud mode and the relay is connected. |
 
 ### File Transfer And Storage
 

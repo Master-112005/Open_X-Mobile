@@ -14,6 +14,7 @@ validation, local transfer history, and an optional cloud relay connection mode.
 - Cloud QR pairing connects only to the relay server and waits for desktop
   approval.
 - Cloud mode registers the phone's existing permanent device ID with the relay.
+- Cloud mode receives paired-device presence and cloud notifications from the relay.
 - Manual pairing-code fallback for diagnostics and advanced setup.
 - Automatic WebSocket reconnect every five seconds after network or desktop
   availability changes.
@@ -128,14 +129,23 @@ Cloud mode persists:
 - heartbeat enabled
 - connection timeout
 
-Cloud mode currently implements relay QR pairing plus the Phase 6 opaque packet
-transport hook. `RelayClient.sendRelayPacket(packet)` can send a validated
-`relay:packet`, and `subscribeToRelayPackets(listener)` receives `relay:packet`,
-`relay:ack`, and `relay:error` messages. This is transport only.
+Cloud mode currently implements relay QR pairing, Phase 6 opaque packet
+transport, Phase 7 remote assistant commands, and Phase 8 cloud file transfer.
+`RelayClient.sendRelayPacket(packet)` can send a validated `relay:packet`, and
+`subscribeToRelayPackets(listener)` receives `relay:packet`, `relay:ack`, and
+`relay:error` messages.
 
-Cloud mode does not implement authentication, remote assistant commands, file
-transfer, sessions, permissions, notifications, or presence through the relay.
-Those are reserved for later relay phases.
+Cloud chat commands are sent as `assistant-command` packets to OpenX Desktop.
+The desktop executes the existing assistant pipeline and returns the structured
+assistant response through the relay.
+
+Cloud file transfer sends metadata first, asks the receiver to accept or reject,
+then transfers chunks with SHA-256 verification before storing the file in the
+same received-files area used by the mobile app.
+
+Cloud mode now supports relay QR pairing, cloud command transport, cloud file
+transfer, paired-device presence, and cloud notification delivery. It does not
+implement cloud voice streaming, screen sharing, cloud backup, or offline sync.
 
 Cloud QR payloads contain only:
 

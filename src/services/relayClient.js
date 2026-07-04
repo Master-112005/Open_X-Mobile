@@ -74,6 +74,8 @@ class RelayClient {
   serverVersion = '';
   device = null;
   owner = null;
+  presence = [];
+  notifications = [];
   deviceIdentity = {
     deviceId: '',
     deviceName: 'OpenX Mobile',
@@ -83,6 +85,8 @@ class RelayClient {
   friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
   statusListeners = new Set();
   relayListeners = new Set();
+  presenceListeners = new Set();
+  notificationListeners = new Set();
 
   updateSettings(settings = {}) {
     this.settings = normalizeCloudSettings({ ...this.settings, ...settings });
@@ -191,6 +195,8 @@ class RelayClient {
         this.serverVersion = '';
         this.device = null;
         this.owner = null;
+        this.presence = [];
+        this.notifications = [];
         this.rejectPendingPairing(new Error('Cloud connection closed.'));
         if (this.manuallyDisconnected || this.status === 'disconnecting') {
           this.friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
@@ -227,6 +233,8 @@ class RelayClient {
     this.serverVersion = '';
     this.device = null;
     this.owner = null;
+    this.presence = [];
+    this.notifications = [];
     this.setStatus('disconnected');
     return Promise.resolve(this.getStatus({ reason }));
   }
@@ -242,6 +250,8 @@ class RelayClient {
 
   destroy() {
     this.statusListeners.clear();
+    this.presenceListeners.clear();
+    this.notificationListeners.clear();
     return this.disconnect('destroy');
   }
 
@@ -271,6 +281,8 @@ class RelayClient {
       serverVersion: this.serverVersion,
       device: this.device,
       owner: this.owner,
+      presence: [...this.presence],
+      notifications: [...this.notifications],
       friendlyMessage: this.friendlyMessage,
       settings: { ...this.settings },
       ...extra,
@@ -295,6 +307,68 @@ class RelayClient {
     return this.send({
       type: 'relay:packet',
       packet,
+    });
+  }
+
+  updatePresence(state, metadata = {}) {
+    return this.send({
+      type: 'presence:update',
+      requestId: `mobile-presence-${Date.now()}`,
+      state,
+      metadata,
+      activity: true,
+    });
+  }
+
+  subscribePresence() {
+    return this.send({
+      type: 'presence:subscribe',
+      requestId: `mobile-presence-subscribe-${Date.now()}`,
+    });
+  }
+
+  requestPresenceList() {
+    return this.send({
+      type: 'presence:list',
+      requestId: `mobile-presence-list-${Date.now()}`,
+    });
+  }
+
+  createNotification(payload = {}) {
+    return this.send({
+      ...payload,
+      type: 'notification:create',
+      requestId: payload.requestId || `mobile-notification-create-${Date.now()}`,
+    });
+  }
+
+  requestNotificationList() {
+    return this.send({
+      type: 'notification:list',
+      requestId: `mobile-notification-list-${Date.now()}`,
+    });
+  }
+
+  markNotificationRead(notificationId) {
+    return this.send({
+      type: 'notification:read',
+      requestId: `mobile-notification-read-${Date.now()}`,
+      notificationId,
+    });
+  }
+
+  dismissNotification(notificationId) {
+    return this.send({
+      type: 'notification:dismiss',
+      requestId: `mobile-notification-dismiss-${Date.now()}`,
+      notificationId,
+    });
+  }
+
+  clearNotifications() {
+    return this.send({
+      type: 'notification:clear',
+      requestId: `mobile-notification-clear-${Date.now()}`,
     });
   }
 
@@ -379,6 +453,18 @@ class RelayClient {
     return () => this.relayListeners.delete(listener);
   }
 
+  subscribeToPresence(listener) {
+    this.presenceListeners.add(listener);
+    listener([...this.presence]);
+    return () => this.presenceListeners.delete(listener);
+  }
+
+  subscribeToNotifications(listener) {
+    this.notificationListeners.add(listener);
+    listener([...this.notifications]);
+    return () => this.notificationListeners.delete(listener);
+  }
+
   handleMessage(rawMessage) {
     try {
       const message = JSON.parse(rawMessage);
@@ -391,6 +477,8 @@ class RelayClient {
       if (message.type === 'device:registered') {
         this.device = message.device || null;
         this.owner = message.owner || null;
+        this.subscribePresence();
+        this.requestNotificationList();
         this.emitStatus();
         return;
       }
@@ -428,6 +516,55 @@ class RelayClient {
         message.type === 'relay:error'
       ) {
         this.emitRelayMessage(message);
+        return;
+      }
+      if (message.type === 'presence:update') {
+        this.upsertPresence(message.presence);
+        this.emitPresence();
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'presence:list' || message.type === 'presence:subscribed') {
+        this.presence = Array.isArray(message.presence) ? message.presence : [];
+        this.emitPresence();
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'notification:new') {
+        this.upsertNotification(message.notification);
+        this.emitNotifications();
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'notification:list') {
+        this.notifications = Array.isArray(message.notifications) ? message.notifications : [];
+        this.emitNotifications();
+        this.emitStatus();
+        return;
+      }
+      if (
+        message.type === 'notification:read' ||
+        message.type === 'notification:dismiss' ||
+        message.type === 'notification:queued'
+      ) {
+        if (message.notification) this.upsertNotification(message.notification);
+        this.emitNotifications();
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'notification:deleted') {
+        this.notifications = this.notifications.filter(
+          (item) => item.notificationId !== message.notificationId,
+        );
+        this.emitNotifications();
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'notification:cleared') {
+        this.notifications = [];
+        this.emitNotifications();
+        this.emitStatus();
+        return;
       }
     } catch {
       // Ignore malformed relay payloads safely; connection health is handled separately.
@@ -438,6 +575,46 @@ class RelayClient {
     this.relayListeners.forEach((listener) => {
       try {
         listener(message);
+      } catch {}
+    });
+  }
+
+  upsertPresence(presence) {
+    if (!presence?.deviceId) return false;
+    const index = this.presence.findIndex((item) => item.deviceId === presence.deviceId);
+    if (index >= 0) this.presence[index] = { ...this.presence[index], ...presence };
+    else this.presence.push(presence);
+    return true;
+  }
+
+  upsertNotification(notification) {
+    if (!notification?.notificationId) return false;
+    const index = this.notifications.findIndex((item) => item.notificationId === notification.notificationId);
+    if (index >= 0) this.notifications[index] = { ...this.notifications[index], ...notification };
+    else this.notifications.unshift(notification);
+    const weights = { low: 0, normal: 1, high: 2, critical: 3 };
+    this.notifications.sort((left, right) => (
+      (weights[right.priority] || 0) - (weights[left.priority] || 0) ||
+      Number(right.createdAt || 0) - Number(left.createdAt || 0)
+    ));
+    this.notifications = this.notifications.slice(0, 100);
+    return true;
+  }
+
+  emitPresence() {
+    const presence = [...this.presence];
+    this.presenceListeners.forEach((listener) => {
+      try {
+        listener(presence);
+      } catch {}
+    });
+  }
+
+  emitNotifications() {
+    const notifications = [...this.notifications];
+    this.notificationListeners.forEach((listener) => {
+      try {
+        listener(notifications);
       } catch {}
     });
   }

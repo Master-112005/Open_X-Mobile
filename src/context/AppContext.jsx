@@ -31,13 +31,14 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AppState } from 'react-native';
+import { Alert, AppState } from 'react-native';
 
 import { websocketService } from '../services/websocket';
 import {
   normalizeCloudSettings,
   relayClient,
 } from '../services/relayClient';
+import { CloudFileTransferManager } from '../services/cloudFileTransfer';
 
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
@@ -45,6 +46,7 @@ const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Android Phone';
 const DEFAULT_CONNECTION_MODE = 'local';
 const PAIRING_TIMEOUT_MS = 15000;
+const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
 
 const parseStoredObject = (value) => {
@@ -117,6 +119,8 @@ export function AppProvider({ children }) {
   );
   const [connectionMode, setConnectionModeState] = useState(DEFAULT_CONNECTION_MODE);
   const [cloudStatus, setCloudStatus] = useState(relayClient.getStatus());
+  const [cloudPresence, setCloudPresence] = useState([]);
+  const [cloudNotifications, setCloudNotifications] = useState([]);
   const [cloudSettings, setCloudSettings] = useState(normalizeCloudSettings());
   const [desktopAddress, setDesktopAddress] = useState('');
   const [desktopPort, setDesktopPort] = useState(DEFAULT_PORT);
@@ -137,6 +141,8 @@ export function AppProvider({ children }) {
   const [sessionExpiresAt, setSessionExpiresAt] = useState(null);
   const pairingDataRef = useRef(initialPairingData);
   const pendingPairingRef = useRef(null);
+  const pendingCloudRequestsRef = useRef(new Map());
+  const cloudFileTransferRef = useRef(null);
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
   const sessionRef = useRef(EMPTY_SESSION);
@@ -230,6 +236,28 @@ export function AppProvider({ children }) {
     });
   }, [persistConnectionSettings]);
 
+  const clearCloudRequest = useCallback((requestId) => {
+    const pending = pendingCloudRequestsRef.current.get(requestId);
+    if (!pending) return null;
+    clearTimeout(pending.timer);
+    pendingCloudRequestsRef.current.delete(requestId);
+    return pending;
+  }, []);
+
+  const appendCloudAssistantResult = useCallback((result, timestamp = Date.now()) => {
+    const responseText = result?.response || result?.message || 'Command completed.';
+    setMessages((current) => [
+      ...current,
+      createMessage('assistant', responseText, timestamp, {
+        intent: result?.intent || null,
+        data: result?.data || null,
+        entities: result?.entities || null,
+        choices: Array.isArray(result?.data?.choices) ? result.data.choices : [],
+        needsClarification: result?.needsClarification === true,
+      }),
+    ]);
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -261,6 +289,84 @@ export function AppProvider({ children }) {
 
     const unsubscribeCloudStatus = relayClient.subscribeToStatus((status) => {
       if (mounted) setCloudStatus(status);
+    });
+
+    const unsubscribeCloudPresence = relayClient.subscribeToPresence((presence) => {
+      if (mounted) setCloudPresence(presence);
+    });
+
+    const unsubscribeCloudNotifications = relayClient.subscribeToNotifications((notifications) => {
+      if (mounted) setCloudNotifications(notifications);
+    });
+
+    const cloudTransferManager = new CloudFileTransferManager({
+      relayClient,
+      getPairingData: () => pairingDataRef.current,
+      recordTransfer,
+      onIncomingTransfer: (transfer) => {
+        if (!mounted) return;
+        Alert.alert(
+          'Incoming OpenX Cloud File',
+          `${transfer.fileName} (${transfer.fileSize} bytes)`,
+          [
+            {
+              text: 'Reject',
+              style: 'cancel',
+              onPress: () => cloudFileTransferRef.current?.rejectTransfer(transfer.transferId),
+            },
+            {
+              text: 'Accept',
+              onPress: () => cloudFileTransferRef.current?.acceptTransfer(transfer.transferId),
+            },
+          ],
+        );
+      },
+      onTransferEvent: (event) => {
+        if (!mounted) return;
+        if (event.type === 'completed' && event.record) {
+          setLastTransferEvent({
+            id: Date.now(),
+            type: 'success',
+            message: `${event.fileName} transfer completed.`,
+          });
+          return;
+        }
+        if (event.type === 'failed') {
+          setLastTransferEvent({
+            id: Date.now(),
+            type: 'error',
+            message: `${event.fileName} transfer failed.`,
+          });
+        }
+      },
+    });
+    cloudFileTransferRef.current = cloudTransferManager;
+    cloudTransferManager.start();
+
+    const unsubscribeRelayPackets = relayClient.subscribeToRelayPackets((message) => {
+      if (!mounted || settingsRef.current.connectionMode !== 'cloud') return;
+      if (message.type === 'relay:ack') return;
+      if (message.type === 'relay:error') {
+        const requestId = message.requestId || '';
+        if (requestId) clearCloudRequest(requestId);
+        setMessages((current) => [
+          ...current,
+          createMessage('assistant', message.message || 'Cloud command failed.'),
+        ]);
+        return;
+      }
+      if (message.type !== 'relay:packet') return;
+      const packet = message.packet || {};
+      if (packet.payload?.type === 'cloud-file-transfer') return;
+      const response = packet.payload || {};
+      const requestId = response.requestId || packet.requestId || '';
+      if (requestId) clearCloudRequest(requestId);
+      const result = response.payload || {
+        success: response.status === 'completed',
+        response: response.error?.message || 'Command completed.',
+        error: response.error?.code || null,
+      };
+      appendCloudAssistantResult(result, response.timestamp || packet.timestamp || Date.now());
     });
 
     const unsubscribeMessages = websocketService.subscribeToMessages(
@@ -617,7 +723,14 @@ export function AppProvider({ children }) {
       pendingPairingRef.current = null;
       unsubscribeStatus();
       unsubscribeCloudStatus();
+      unsubscribeCloudPresence();
+      unsubscribeCloudNotifications();
+      unsubscribeRelayPackets();
+      cloudTransferManager.stop();
+      cloudFileTransferRef.current = null;
       unsubscribeMessages();
+      pendingCloudRequestsRef.current.forEach((pending) => clearTimeout(pending.timer));
+      pendingCloudRequestsRef.current.clear();
       websocketService.disconnect();
       relayClient.disconnect('app-context-unmount').catch(() => {});
     };
@@ -625,6 +738,8 @@ export function AppProvider({ children }) {
     applyPairingData,
     applyPermissionState,
     applySession,
+    appendCloudAssistantResult,
+    clearCloudRequest,
     recordTransfer,
   ]);
 
@@ -666,14 +781,68 @@ export function AppProvider({ children }) {
       const normalizedText = text.trim();
       if (!normalizedText) return false;
       if (settingsRef.current.connectionMode === 'cloud') {
+        const cloudPairing = pairingDataRef.current.cloudPairing || {};
+        const requestId = Crypto.randomUUID();
+        const packetId = `cloud_command_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        if (
+          !relayClient.isConnected() ||
+          !pairingDataRef.current.paired ||
+          !cloudPairing.ownerId ||
+          !cloudPairing.desktopDeviceId ||
+          !pairingDataRef.current.deviceId
+        ) {
+          setMessages((current) => [
+            ...current,
+            createMessage('user', normalizedText),
+            createMessage('assistant', 'Cloud is not ready. Connect and pair this phone with OpenX Desktop.'),
+          ]);
+          return true;
+        }
+
+        const packet = {
+          packetId,
+          protocolVersion: 1,
+          packetType: 'request',
+          sourceDeviceId: cloudPairing.phoneDeviceId || pairingDataRef.current.deviceId,
+          destinationDeviceId: cloudPairing.desktopDeviceId,
+          ownerId: cloudPairing.ownerId,
+          timestamp: Date.now(),
+          requestId,
+          responseId: null,
+          metadata: {
+            feature: 'assistant-command',
+            deviceName: pairingDataRef.current.deviceName,
+          },
+          checksum: null,
+          encryption: null,
+          payload: {
+            type: 'assistant-command',
+            command: normalizedText,
+            deviceName: pairingDataRef.current.deviceName,
+            metadata: {
+              client: 'openx-mobile',
+            },
+          },
+        };
+
+        const timer = setTimeout(() => {
+          if (!pendingCloudRequestsRef.current.has(requestId)) return;
+          pendingCloudRequestsRef.current.delete(requestId);
+          setMessages((current) => [
+            ...current,
+            createMessage('assistant', 'Cloud command timed out. Please try again.'),
+          ]);
+        }, CLOUD_COMMAND_TIMEOUT_MS);
+        pendingCloudRequestsRef.current.set(requestId, { packetId, timer });
+        const sent = relayClient.sendRelayPacket(packet);
         setMessages((current) => [
           ...current,
           createMessage('user', normalizedText),
-          createMessage(
-            'assistant',
-            'Cloud relay currently supports connection, pairing, and device management. Desktop commands through cloud arrive in a later update.',
-          ),
+          ...(!sent
+            ? [createMessage('assistant', CONNECTION_ERROR_MESSAGE)]
+            : []),
         ]);
+        if (!sent) clearCloudRequest(requestId);
         return true;
       }
       if (
@@ -710,7 +879,7 @@ export function AppProvider({ children }) {
 
       return true;
     },
-    [paired],
+    [clearCloudRequest, paired],
   );
 
   const saveSettings = useCallback(async (address, port) => {
@@ -900,7 +1069,15 @@ export function AppProvider({ children }) {
       const pairingData = pairingDataRef.current;
 
       if (settingsRef.current.connectionMode === 'cloud') {
-        throw new Error('Cloud file transfer arrives in a later update. Switch to Local mode for file transfer.');
+        if (!pairingData.paired) {
+          throw new Error('Pair device before transferring files.');
+        }
+        if (!relayClient.isConnected()) {
+          throw new Error('Connect to OpenX Relay before transferring files.');
+        }
+        const record = await cloudFileTransferRef.current?.sendFile(file);
+        if (!record) throw new Error('Cloud file transfer is unavailable.');
+        return record;
       }
 
       if (!pairingData.paired) {
@@ -997,12 +1174,22 @@ export function AppProvider({ children }) {
     setLastTransferEvent(null);
   }, []);
 
+  const markCloudNotificationRead = useCallback((notificationId) => {
+    relayClient.markNotificationRead(notificationId);
+  }, []);
+
+  const dismissCloudNotification = useCallback((notificationId) => {
+    relayClient.dismissNotification(notificationId);
+  }, []);
+
   const value = useMemo(
     () => ({
       messages,
       connectionStatus,
       connectionMode,
       cloudStatus,
+      cloudPresence,
+      cloudNotifications,
       cloudSettings,
       desktopAddress,
       desktopPort,
@@ -1029,6 +1216,8 @@ export function AppProvider({ children }) {
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
+      markCloudNotificationRead,
+      dismissCloudNotification,
       setConnectionMode,
       saveCloudSettings,
       connectCloud,
@@ -1039,6 +1228,8 @@ export function AppProvider({ children }) {
       connectionStatus,
       connectionMode,
       cloudStatus,
+      cloudPresence,
+      cloudNotifications,
       cloudSettings,
       desktopAddress,
       desktopPort,
@@ -1065,6 +1256,8 @@ export function AppProvider({ children }) {
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
+      markCloudNotificationRead,
+      dismissCloudNotification,
       setConnectionMode,
       saveCloudSettings,
       connectCloud,
