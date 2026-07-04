@@ -48,6 +48,8 @@ export default function HomeScreen({ navigation }) {
   const {
     messages,
     connectionStatus,
+    connectionMode,
+    cloudStatus,
     paired,
     pairingLoaded,
     permissions,
@@ -64,21 +66,27 @@ export default function HomeScreen({ navigation }) {
   const listRef = useRef(null);
   const insets = useSafeAreaInsets();
   const topControlsHeight = insets.top + spacing.sm + 58 + spacing.lg;
+  const activeConnectionStatus = connectionMode === 'cloud'
+    ? cloudStatus?.state
+    : connectionStatus;
 
-  const commandRestriction = !pairingLoaded || !paired
-    ? 'Pair this phone with OpenX Desktop.'
-    : !permissionsLoaded
-      ? 'Checking desktop permissions.'
-      : !permissions.remoteCommands
-        ? 'Remote commands are disabled.'
-        : !sessionLoaded
-          ? 'Checking session.'
-          : !sessionValid
-            ? 'Session expired. Reconnect with QR.'
-            : null;
+  const commandRestriction = connectionMode === 'cloud'
+    ? 'Cloud relay is Phase 3 connection only.'
+    : !pairingLoaded || !paired
+      ? 'Pair this phone with OpenX Desktop.'
+      : !permissionsLoaded
+        ? 'Checking desktop permissions.'
+        : !permissions.remoteCommands
+          ? 'Remote commands are disabled.'
+          : !sessionLoaded
+            ? 'Checking session.'
+            : !sessionValid
+              ? 'Session expired. Reconnect with QR.'
+              : null;
 
   const canSendText = !commandRestriction && text.trim().length > 0;
   const canSendFile = paired &&
+    connectionMode === 'local' &&
     permissionsLoaded &&
     permissions.fileTransfer &&
     permissions.sendFiles &&
@@ -153,7 +161,7 @@ export default function HomeScreen({ navigation }) {
                 label="Files"
                 onPress={() => navigation.navigate('Transfers')}
               />
-              <ConnectionDot status={connectionStatus} />
+              <ConnectionDot status={activeConnectionStatus} />
             </View>
             <View style={styles.rightCluster}>
               <FloatingButton

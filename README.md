@@ -3,16 +3,23 @@
 OpenX Mobile is an Android-first Expo app for controlling and exchanging files
 with OpenX Desktop over a local WebSocket connection. It provides a paired mobile
 assistant interface, QR-based device setup, read-only desktop permissions, session
-validation, and local transfer history.
+validation, local transfer history, and an optional cloud relay connection mode.
 
 ## Features
 
 - Mobile assistant command screen for sending remote commands to OpenX Desktop.
-- QR pairing flow that saves the desktop address, port, device identity, and
-  session details after a successful scan.
+- QR pairing flow for local LAN pairing and cloud relay pairing.
+- Local QR pairing saves the desktop address, port, device identity, and session
+  details after a successful scan.
+- Cloud QR pairing connects only to the relay server and waits for desktop
+  approval.
+- Cloud mode registers the phone's existing permanent device ID with the relay.
 - Manual pairing-code fallback for diagnostics and advanced setup.
 - Automatic WebSocket reconnect every five seconds after network or desktop
   availability changes.
+- Optional Cloud mode for connecting the phone to the OpenX Relay Server.
+- Connection mode selection: Local direct-to-desktop or Cloud relay.
+- Cloud reconnect with bounded exponential backoff and manual disconnect control.
 - Read-only permission state controlled by OpenX Desktop:
   - remote commands
   - file transfer
@@ -98,6 +105,57 @@ disabled until pairing succeeds and a valid session is available.
 For diagnostics, Settings includes Advanced Settings where you can manually enter
 a desktop IP address and port. The default port is `8080`.
 
+## Connection Modes
+
+OpenX Mobile is local-first. Local mode remains the default and is the only mode
+that supports QR pairing, desktop commands, permissions, sessions, and file
+transfer in this phase.
+
+Settings includes `Connection mode`:
+
+- `Local`: connects directly to OpenX Desktop over local WiFi.
+- `Cloud`: connects only to the OpenX Relay Server.
+
+Only one provider is active at a time. Switching to Cloud disconnects the local
+desktop socket. Switching back to Local disconnects the relay socket and restores
+the direct desktop path.
+
+Cloud mode persists:
+
+- relay URL
+- auto connect
+- reconnect enabled
+- heartbeat enabled
+- connection timeout
+
+Cloud mode currently implements relay QR pairing plus the Phase 6 opaque packet
+transport hook. `RelayClient.sendRelayPacket(packet)` can send a validated
+`relay:packet`, and `subscribeToRelayPackets(listener)` receives `relay:packet`,
+`relay:ack`, and `relay:error` messages. This is transport only.
+
+Cloud mode does not implement authentication, remote assistant commands, file
+transfer, sessions, permissions, notifications, or presence through the relay.
+Those are reserved for later relay phases.
+
+Cloud QR payloads contain only:
+
+```json
+{
+  "version": 1,
+  "relayUrl": "ws://localhost:8080/ws",
+  "pairToken": "relay-generated-token",
+  "expiresAt": 1767225600000
+}
+```
+
+After scan, the phone connects to the relay server, sends a cloud pair request,
+waits for desktop approval, and records the pairing state after approval. The
+phone never connects directly to the desktop while pairing in Cloud mode.
+
+The relay keeps device identity separate from connection identity. Reconnecting
+the same phone reuses the existing `deviceId`; only the temporary relay
+connection ID changes.
+
 ## WebSocket Protocol Expectations
 
 OpenX Mobile connects to:
@@ -165,7 +223,7 @@ Transfer history stores metadata only and is capped at 100 items.
 
 The app persists these keys in AsyncStorage:
 
-- `@openx/settings` for desktop address and port
+- `@openx/settings` for connection mode, desktop address/port, and cloud relay settings
 - `@openx/pairing` for device identity and pairing status
 - `@openx/permissions` for the latest desktop permission state
 - `@openx/session` for the active session token and timestamps

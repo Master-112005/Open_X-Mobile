@@ -1,5 +1,6 @@
 const INVALID_QR_MESSAGE = 'Invalid pairing QR code.';
 const EXPIRED_QR_MESSAGE = 'This pairing QR code has expired.';
+const CLOUD_PAIR_VERSION = 1;
 
 function isIpv4Address(value) {
   const parts = String(value || '').trim().split('.');
@@ -21,6 +22,40 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
 
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     throw new Error(INVALID_QR_MESSAGE);
+  }
+
+  const relayUrl = typeof payload.relayUrl === 'string'
+    ? payload.relayUrl.trim()
+    : '';
+  const cloudPairToken = typeof payload.pairToken === 'string'
+    ? payload.pairToken.trim()
+    : '';
+  const cloudVersion = Number(payload.version);
+  const rawCloudExpiresAt = Number(payload.expiresAt);
+
+  if (relayUrl || cloudPairToken || cloudVersion) {
+    if (
+      cloudVersion !== CLOUD_PAIR_VERSION ||
+      !/^wss?:\/\/[^\s/$.?#].[^\s]*$/i.test(relayUrl) ||
+      !cloudPairToken ||
+      !Number.isFinite(rawCloudExpiresAt) ||
+      rawCloudExpiresAt <= 0
+    ) {
+      throw new Error(INVALID_QR_MESSAGE);
+    }
+    const expiresAt = rawCloudExpiresAt < 1_000_000_000_000
+      ? rawCloudExpiresAt * 1000
+      : rawCloudExpiresAt;
+    if (expiresAt <= now) {
+      throw new Error(EXPIRED_QR_MESSAGE);
+    }
+    return {
+      mode: 'cloud',
+      relayUrl,
+      pairToken: cloudPairToken,
+      expiresAt,
+      version: CLOUD_PAIR_VERSION,
+    };
   }
 
   const serverIp =
@@ -68,6 +103,7 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
   }
 
   return {
+    mode: 'local',
     serverIp,
     serverIpCandidates: connectionCandidates,
     serverPort,

@@ -27,6 +27,7 @@ export default function QRPairingScreen({ navigation, route }) {
   const scanProgress = useRef(new Animated.Value(0)).current;
   const {
     deviceName,
+    pairCloudDevice,
     pairDevice,
     testConnection,
   } = useApp();
@@ -76,6 +77,18 @@ export default function QRPairingScreen({ navigation, route }) {
 
     try {
       const payload = parsePairingQrPayload(data);
+      if (payload.mode === 'cloud') {
+        await pairCloudDevice({
+          relayUrl: payload.relayUrl,
+          pairToken: payload.pairToken,
+          deviceName: selectedDeviceName,
+        });
+        Alert.alert('Pairing complete', 'Device paired through the relay successfully.', [
+          { text: 'OK', onPress: () => navigation.popToTop() },
+        ]);
+        return;
+      }
+
       const port = String(payload.serverPort);
       const candidates = payload.serverIpCandidates?.length
         ? payload.serverIpCandidates

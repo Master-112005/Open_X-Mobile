@@ -31,13 +31,19 @@ import {
   useRef,
   useState,
 } from 'react';
+import { AppState } from 'react-native';
 
 import { websocketService } from '../services/websocket';
+import {
+  normalizeCloudSettings,
+  relayClient,
+} from '../services/relayClient';
 
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Android Phone';
+const DEFAULT_CONNECTION_MODE = 'local';
 const PAIRING_TIMEOUT_MS = 15000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
 
@@ -82,11 +88,17 @@ const normalizeConnectionSettings = (settings) => {
     settings.serverPort ?? settings.desktopPort ?? DEFAULT_PORT,
   ).trim();
 
+  const connectionMode = settings.connectionMode === 'cloud'
+    ? 'cloud'
+    : DEFAULT_CONNECTION_MODE;
+
   return {
+    connectionMode,
     serverIp,
     serverPort: serverPort || DEFAULT_PORT,
     desktopAddress: serverIp,
     desktopPort: serverPort || DEFAULT_PORT,
+    cloud: normalizeCloudSettings(settings.cloud || {}),
   };
 };
 
@@ -103,6 +115,9 @@ export function AppProvider({ children }) {
   const [connectionStatus, setConnectionStatus] = useState(
     websocketService.getStatus(),
   );
+  const [connectionMode, setConnectionModeState] = useState(DEFAULT_CONNECTION_MODE);
+  const [cloudStatus, setCloudStatus] = useState(relayClient.getStatus());
+  const [cloudSettings, setCloudSettings] = useState(normalizeCloudSettings());
   const [desktopAddress, setDesktopAddress] = useState('');
   const [desktopPort, setDesktopPort] = useState(DEFAULT_PORT);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -125,10 +140,17 @@ export function AppProvider({ children }) {
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
   const sessionRef = useRef(EMPTY_SESSION);
+  const settingsRef = useRef(normalizeConnectionSettings({}));
 
   const applyPairingData = useCallback((data) => {
     pairingDataRef.current = data;
     websocketService.setClientIdentity(data.deviceId, data.deviceName);
+    relayClient.setDeviceIdentity({
+      deviceId: data.deviceId,
+      deviceName: data.deviceName,
+      deviceType: 'phone',
+      platform: 'mobile',
+    });
     setDeviceId(data.deviceId);
     setDeviceName(data.deviceName);
     setPaired(data.paired);
@@ -161,6 +183,53 @@ export function AppProvider({ children }) {
     setSessionExpiresAt(session.expiresAt);
   }, []);
 
+  const persistConnectionSettings = useCallback(async (updates = {}) => {
+    const nextSettings = normalizeConnectionSettings({
+      ...settingsRef.current,
+      ...updates,
+      cloud: {
+        ...settingsRef.current.cloud,
+        ...(updates.cloud || {}),
+      },
+    });
+    settingsRef.current = nextSettings;
+    setConnectionModeState(nextSettings.connectionMode);
+    setDesktopAddress(nextSettings.serverIp);
+    setDesktopPort(nextSettings.serverPort);
+    setCloudSettings(nextSettings.cloud);
+    relayClient.updateSettings(nextSettings.cloud);
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+    return nextSettings;
+  }, []);
+
+  const activateLocalMode = useCallback(async (updates = {}) => {
+    relayClient.disconnect('switch-to-local').catch(() => {});
+    const nextSettings = await persistConnectionSettings({
+      ...updates,
+      connectionMode: 'local',
+    });
+    if (nextSettings.serverIp && nextSettings.serverPort) {
+      websocketService
+        .connect(nextSettings.serverIp, nextSettings.serverPort)
+        .catch(() => {
+          // Local service owns status and retry behavior.
+        });
+    }
+    return nextSettings;
+  }, [persistConnectionSettings]);
+
+  const activateCloudMode = useCallback(async (updates = {}) => {
+    websocketService.disconnect();
+    const nextCloud = normalizeCloudSettings({
+      ...settingsRef.current.cloud,
+      ...(updates.cloud || updates),
+    });
+    return persistConnectionSettings({
+      connectionMode: 'cloud',
+      cloud: nextCloud,
+    });
+  }, [persistConnectionSettings]);
+
   useEffect(() => {
     let mounted = true;
 
@@ -190,9 +259,14 @@ export function AppProvider({ children }) {
       }
     });
 
+    const unsubscribeCloudStatus = relayClient.subscribeToStatus((status) => {
+      if (mounted) setCloudStatus(status);
+    });
+
     const unsubscribeMessages = websocketService.subscribeToMessages(
       (message) => {
         if (!mounted) return;
+        if (settingsRef.current.connectionMode === 'cloud') return;
 
         if (message.type === 'pair-success') {
           const pending = pendingPairingRef.current;
@@ -485,6 +559,10 @@ export function AppProvider({ children }) {
         const parsedPairing = parseStoredObject(savedPairing);
         const savedAddress = parsedSettings.serverIp;
         const savedPort = parsedSettings.serverPort;
+        settingsRef.current = parsedSettings;
+        setConnectionModeState(parsedSettings.connectionMode);
+        setCloudSettings(parsedSettings.cloud);
+        relayClient.updateSettings(parsedSettings.cloud);
         const nextPairingData = {
           deviceId: parsedPairing.deviceId || Crypto.randomUUID(),
           deviceName: parsedPairing.deviceName || DEFAULT_DEVICE_NAME,
@@ -504,7 +582,15 @@ export function AppProvider({ children }) {
           JSON.stringify(nextPairingData),
         );
 
-        if (savedAddress && savedPort) {
+        if (parsedSettings.connectionMode === 'cloud') {
+          websocketService.disconnect();
+          if (parsedSettings.cloud.autoConnect) {
+            relayClient.connect(parsedSettings.cloud).catch(() => {
+              // Cloud status and reconnect are managed by relayClient.
+            });
+          }
+        } else if (savedAddress && savedPort) {
+          relayClient.disconnect('local-mode-startup').catch(() => {});
           websocketService.connect(savedAddress, savedPort).catch(() => {
             // Status and indefinite retries are managed by the service.
           });
@@ -530,8 +616,10 @@ export function AppProvider({ children }) {
       if (pending) clearTimeout(pending.timer);
       pendingPairingRef.current = null;
       unsubscribeStatus();
+      unsubscribeCloudStatus();
       unsubscribeMessages();
       websocketService.disconnect();
+      relayClient.disconnect('app-context-unmount').catch(() => {});
     };
   }, [
     applyPairingData,
@@ -556,9 +644,38 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timer);
   }, [sessionExpiresAt, sessionValid]);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (
+        nextState === 'active' &&
+        settingsRef.current.connectionMode === 'cloud' &&
+        settingsRef.current.cloud.autoConnect &&
+        !relayClient.isConnected()
+      ) {
+        relayClient.connect(settingsRef.current.cloud).catch(() => {
+          // The cloud client keeps the UI responsive and handles retry state.
+        });
+      }
+    });
+
+    return () => subscription.remove();
+  }, []);
+
   const sendMessage = useCallback(
     (text) => {
       const normalizedText = text.trim();
+      if (!normalizedText) return false;
+      if (settingsRef.current.connectionMode === 'cloud') {
+        setMessages((current) => [
+          ...current,
+          createMessage('user', normalizedText),
+          createMessage(
+            'assistant',
+            'Cloud relay currently supports connection, pairing, and device management. Desktop commands through cloud arrive in a later update.',
+          ),
+        ]);
+        return true;
+      }
       if (
         !normalizedText ||
         !paired ||
@@ -597,29 +714,50 @@ export function AppProvider({ children }) {
   );
 
   const saveSettings = useCallback(async (address, port) => {
-    const nextSettings = normalizeConnectionSettings({
+    const nextSettings = await activateLocalMode({
       serverIp: address,
       serverPort: port,
     });
-
-    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
-    setDesktopAddress(nextSettings.serverIp);
-    setDesktopPort(nextSettings.serverPort);
-
-    if (nextSettings.serverIp) {
-      websocketService
-        .connect(nextSettings.serverIp, nextSettings.serverPort)
-        .catch(() => {
-          // Saving succeeds independently; the UI reflects connection failure.
-        });
-    } else {
+    if (!nextSettings.serverIp) {
       websocketService.disconnect();
     }
-  }, []);
+  }, [activateLocalMode]);
 
   const testConnection = useCallback((address, port) => {
+    activateLocalMode({
+      serverIp: address,
+      serverPort: port,
+    }).catch(() => {});
     return websocketService.connect(address.trim(), port.trim());
-  }, []);
+  }, [activateLocalMode]);
+
+  const setConnectionMode = useCallback(async (mode) => {
+    if (mode === 'cloud') {
+      return activateCloudMode();
+    }
+    return activateLocalMode();
+  }, [activateCloudMode, activateLocalMode]);
+
+  const saveCloudSettings = useCallback(async (settings) => {
+    const nextSettings = await activateCloudMode({ cloud: settings });
+    return nextSettings.cloud;
+  }, [activateCloudMode]);
+
+  const connectCloud = useCallback(async (settings = {}) => {
+    const nextSettings = await activateCloudMode({ cloud: settings });
+    return relayClient.connect(nextSettings.cloud);
+  }, [activateCloudMode]);
+
+  const disconnectCloud = useCallback(async () => {
+    const nextSettings = await persistConnectionSettings({
+      connectionMode: 'cloud',
+      cloud: {
+        ...settingsRef.current.cloud,
+        autoConnect: false,
+      },
+    });
+    return relayClient.disconnect('manual-disconnect').then(() => nextSettings);
+  }, [persistConnectionSettings]);
 
   const pairDevice = useCallback((name, token) => {
     const normalizedName = normalizeDeviceName(name);
@@ -685,6 +823,47 @@ export function AppProvider({ children }) {
     });
   }, [applyPairingData, applySession]);
 
+  const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, deviceName: name }) => {
+    const normalizedName = normalizeDeviceName(name || pairingDataRef.current.deviceName);
+    if (!normalizedName) {
+      throw new Error('Device name is required.');
+    }
+    if (!pairingDataRef.current.deviceId) {
+      throw new Error('Device identity is not ready.');
+    }
+
+    await activateCloudMode({ cloud: { relayUrl } });
+    applySession({ ...EMPTY_SESSION });
+    clearPersistedSession().catch(() => {
+      console.warn('Unable to reset the previous OpenX session.');
+    });
+
+    const result = await relayClient.pairWithToken({
+      relayUrl,
+      pairToken,
+      deviceName: normalizedName,
+    });
+
+    const nextPairingData = {
+      ...pairingDataRef.current,
+      deviceName: normalizedName,
+      paired: true,
+      pairedAt: Date.now(),
+      cloudPairing: {
+        relayUrl,
+        tokenId: result.tokenId || '',
+        ownerId: result.ownerId || '',
+        desktopDeviceId: result.desktopDeviceId || '',
+        phoneDeviceId: result.phoneDeviceId || pairingDataRef.current.deviceId,
+        pair: result.pair || null,
+        pairedAt: Date.now(),
+      },
+    };
+    applyPairingData(nextPairingData);
+    await AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData));
+    return nextPairingData;
+  }, [activateCloudMode, applyPairingData, applySession]);
+
   const updateDeviceName = useCallback(async (name) => {
     const normalizedName = normalizeDeviceName(name);
     if (!normalizedName) {
@@ -719,6 +898,10 @@ export function AppProvider({ children }) {
   const sendFile = useCallback(
     async (file) => {
       const pairingData = pairingDataRef.current;
+
+      if (settingsRef.current.connectionMode === 'cloud') {
+        throw new Error('Cloud file transfer arrives in a later update. Switch to Local mode for file transfer.');
+      }
 
       if (!pairingData.paired) {
         throw new Error('Pair device before transferring files.');
@@ -818,6 +1001,9 @@ export function AppProvider({ children }) {
     () => ({
       messages,
       connectionStatus,
+      connectionMode,
+      cloudStatus,
+      cloudSettings,
       desktopAddress,
       desktopPort,
       settingsLoaded,
@@ -838,14 +1024,22 @@ export function AppProvider({ children }) {
       saveSettings,
       testConnection,
       pairDevice,
+      pairCloudDevice,
       updateDeviceName,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
+      setConnectionMode,
+      saveCloudSettings,
+      connectCloud,
+      disconnectCloud,
     }),
     [
       messages,
       connectionStatus,
+      connectionMode,
+      cloudStatus,
+      cloudSettings,
       desktopAddress,
       desktopPort,
       settingsLoaded,
@@ -866,10 +1060,15 @@ export function AppProvider({ children }) {
       saveSettings,
       testConnection,
       pairDevice,
+      pairCloudDevice,
       updateDeviceName,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
+      setConnectionMode,
+      saveCloudSettings,
+      connectCloud,
+      disconnectCloud,
     ],
   );
 

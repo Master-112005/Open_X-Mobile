@@ -22,6 +22,8 @@ The current implementation includes:
 - top floating control bar for files, connection status, QR scanner, and settings;
 - QR pairing and manual connection fallback;
 - local WebSocket communication with reconnect handling;
+- optional cloud relay connection mode isolated from the local WebSocket implementation;
+- connection-mode persistence with one active provider at a time;
 - session token validation and expiry handling;
 - read-only permission display from OpenX Desktop;
 - phone-to-desktop file sending;
@@ -41,11 +43,11 @@ C:\Users\rakes\Documents\PROJECTS\open\OpenX_Mobile\mobile
 
 Filtered project count:
 
-- Files in report tree: 27
-- Source files: 17
+- Files in report tree: 28
+- Source files: 18
 - Component files: 5
 - Screen files: 4
-- Service files: 5
+- Service files: 6
 - Root/config/documentation files: 9
 
 The tree excludes local-only or generated noise:
@@ -84,18 +86,19 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | Module | Path | Responsibility |
 |---|---|---|
 | App root | `App.js` | Provides safe-area context, app provider, navigation, status bar, and launch overlay |
-| Global state | `src/context/AppContext.jsx` | Owns chat messages, pairing state, session state, permissions, transfer history, and command/file actions |
+| Global state | `src/context/AppContext.jsx` | Owns chat messages, connection mode, pairing state, session state, permissions, transfer history, and command/file actions |
 | Navigation | `src/navigation/AppNavigator.jsx` | Defines the native-stack navigation between chat, QR pairing, settings, and transfers |
 | Chat screen | `src/screens/HomeScreen.jsx` | Main mobile chat UI, top floating controls, composer, file selection, and structured choice submission |
 | QR pairing screen | `src/screens/QRPairingScreen.jsx` | Camera-based QR scan flow and manual pairing fallback |
-| Settings screen | `src/screens/SettingsScreen.jsx` | Desktop connection, pairing status, read-only permissions, and advanced connection settings |
+| Settings screen | `src/screens/SettingsScreen.jsx` | Connection mode, cloud relay settings, desktop connection, read-only permissions, and advanced connection settings |
 | Transfers screen | `src/screens/TransfersScreen.jsx` | Received-file list, tap-to-open, long-press manage sheet, share, and delete |
 | Chat bubble | `src/components/ChatBubble.jsx` | Renders assistant/user messages, result cards, and selectable clarification choices |
 | Glass UI primitives | `src/components/GlassButton.jsx`, `src/components/GlassPanel.jsx`, `src/components/ScreenBackground.jsx`, `src/components/FadeInView.jsx` | Reusable theme-matching visual primitives and animation helpers |
 | WebSocket service | `src/services/websocket.js` | Local WebSocket lifecycle, reconnects, command sending, chunked file transfer, transfer acknowledgements, and message fanout |
+| Relay client | `src/services/relayClient.js` | Optional cloud relay WebSocket lifecycle, device registration, reconnects, status snapshots, timeout handling, cloud QR pairing, opaque relay packet hooks, and future auth placeholders |
 | File transfer service | `src/services/fileTransfer.js` | File picking, size checks, base64 conversion, SHA-256 hashing, incoming file storage, deletion, and transfer history |
 | Permissions service | `src/services/permissions.js` | Normalizes and persists desktop-controlled phone permissions |
-| QR pairing parser | `src/services/qrPairing.js` | Validates desktop QR payloads, IP/port, token, and expiry |
+| QR pairing parser | `src/services/qrPairing.js` | Validates local LAN QR payloads and cloud relay QR payloads with expiry checks |
 | Session service | `src/services/session.js` | Normalizes, validates, persists, and clears session tokens |
 | Theme | `src/styles/theme.js` | Central colors, spacing, radius, gradients, and shadow tokens |
 
@@ -128,7 +131,10 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 |---|---|---|
 | `AppProvider()` | `src/context/AppContext.jsx` | Central provider for all app state and OpenX Desktop communication. |
 | `createMessage(role, text, timestamp, metadata)` | `src/context/AppContext.jsx` | Normalizes chat messages and attaches assistant metadata such as choices. |
-| `normalizeConnectionSettings(settings)` | `src/context/AppContext.jsx` | Converts saved or QR connection data into stable server IP/port values. |
+| `normalizeConnectionSettings(settings)` | `src/context/AppContext.jsx` | Converts saved connection mode, local server IP/port, and cloud settings into a stable settings object. |
+| `persistConnectionSettings(updates)` | `src/context/AppContext.jsx` | Persists the selected network provider and its settings to AsyncStorage. |
+| `activateLocalMode(updates)` | `src/context/AppContext.jsx` | Disconnects cloud relay and restores the local desktop WebSocket path. |
+| `activateCloudMode(updates)` | `src/context/AppContext.jsx` | Disconnects local desktop WebSocket and selects the cloud relay provider. |
 | `applyPairingData(data)` | `src/context/AppContext.jsx` | Updates current device identity and pairing state. |
 | `applySession(session)` | `src/context/AppContext.jsx` | Updates active session validity and expiry. |
 | `applyPermissionState(permissionState)` | `src/context/AppContext.jsx` | Stores latest desktop permission state. |
@@ -136,6 +142,11 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | `sendMessage(text)` | `src/context/AppContext.jsx` | Sends a command to desktop if paired, permitted, and session-valid. |
 | `saveSettings(address, port)` | `src/context/AppContext.jsx` | Saves manual desktop connection settings and reconnects. |
 | `testConnection(address, port)` | `src/context/AppContext.jsx` | Tests WebSocket connectivity to OpenX Desktop. |
+| `setConnectionMode(mode)` | `src/context/AppContext.jsx` | Switches between Local and Cloud while enforcing one active connection provider. |
+| `saveCloudSettings(settings)` | `src/context/AppContext.jsx` | Saves relay URL, reconnect, heartbeat, timeout, and auto-connect settings. |
+| `connectCloud(settings)` | `src/context/AppContext.jsx` | Connects the mobile app to the relay server only. |
+| `disconnectCloud()` | `src/context/AppContext.jsx` | Manually disconnects from relay and stops cloud reconnect behavior. |
+| `pairCloudDevice(payload)` | `src/context/AppContext.jsx` | Switches to Cloud mode, sends a relay pair request, waits for desktop approval, and persists cloud pairing state. |
 | `pairDevice(name, token)` | `src/context/AppContext.jsx` | Sends a pairing request and waits for desktop confirmation. |
 | `sendFile(file)` | `src/context/AppContext.jsx` | Validates permissions/session, prepares a file, and sends it to desktop. |
 | `deleteReceivedFile(recordId)` | `src/context/AppContext.jsx` | Deletes a stored received file and updates history. |
@@ -160,6 +171,25 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 | `OpenXWebSocketService.subscribeToStatus(listener)` | `src/services/websocket.js` | Subscribes UI state to socket status changes. |
 | `OpenXWebSocketService.subscribeToMessages(listener)` | `src/services/websocket.js` | Subscribes app state to desktop messages. |
 
+### Cloud Relay Client
+
+| Function or method | File | Purpose |
+|---|---|---|
+| `normalizeRelayUrl(value)` | `src/services/relayClient.js` | Normalizes `http`, `https`, `ws`, or `wss` relay URLs without requiring a URL polyfill. |
+| `normalizeCloudSettings(settings)` | `src/services/relayClient.js` | Sanitizes relay URL, auto-connect, reconnect, heartbeat, and timeout settings. |
+| `RelayClient.connect(settings)` | `src/services/relayClient.js` | Opens the optional cloud relay WebSocket connection. |
+| `RelayClient.disconnect(reason)` | `src/services/relayClient.js` | Closes the relay socket, timers, and reconnect state after manual disconnect or mode switch. |
+| `RelayClient.reconnect()` | `src/services/relayClient.js` | Reopens the relay connection with bounded backoff after unexpected disconnects. |
+| `RelayClient.getStatus(extra)` | `src/services/relayClient.js` | Returns UI-safe relay state, relay URL, timestamps, duration, reconnect attempts, quality placeholder, and friendly text. |
+| `RelayClient.send(payload)` | `src/services/relayClient.js` | Sends relay protocol payloads only when connected. |
+| `RelayClient.sendRelayPacket(packet)` | `src/services/relayClient.js` | Sends a Phase 6 opaque relay packet without implementing mobile-side assistant execution. |
+| `RelayClient.setDeviceIdentity(identity)` | `src/services/relayClient.js` | Loads the existing mobile device ID/name into the relay client for stable cloud registration. |
+| `RelayClient.registerDevice()` | `src/services/relayClient.js` | Registers the phone as a relay device without enabling cloud command or file routing. |
+| `RelayClient.pairWithToken(payload)` | `src/services/relayClient.js` | Sends a cloud pair request to the relay and resolves only after desktop approval. |
+| `RelayClient.authenticate()` | `src/services/relayClient.js` | Placeholder for future relay authentication phases. |
+| `RelayClient.subscribeToStatus(listener)` | `src/services/relayClient.js` | Publishes connection state to Settings and Home UI. |
+| `RelayClient.subscribeToRelayPackets(listener)` | `src/services/relayClient.js` | Publishes `relay:packet`, `relay:ack`, and `relay:error` transport messages for future cloud features. |
+
 ### File Transfer And Storage
 
 | Function or method | File | Purpose |
@@ -178,7 +208,7 @@ The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin 
 
 | Function or method | File | Purpose |
 |---|---|---|
-| `parsePairingQrPayload(rawPayload, now)` | `src/services/qrPairing.js` | Validates QR JSON, LAN IP, port, token, and expiry. |
+| `parsePairingQrPayload(rawPayload, now)` | `src/services/qrPairing.js` | Parses either local LAN QR JSON or cloud relay QR JSON and rejects malformed or expired codes. |
 | `normalizePermissions(value, fallback)` | `src/services/permissions.js` | Normalizes desktop-controlled permissions. |
 | `loadPermissionState()` | `src/services/permissions.js` | Loads persisted permission state. |
 | `persistPermissionState(permissionState)` | `src/services/permissions.js` | Saves latest permission state from desktop. |
