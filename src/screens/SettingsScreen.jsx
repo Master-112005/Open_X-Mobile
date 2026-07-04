@@ -44,15 +44,19 @@ export default function SettingsScreen({ navigation }) {
   const {
     desktopAddress,
     desktopPort,
+    deviceName,
     permissions,
     permissionsLastUpdated,
     permissionsLoaded,
     saveSettings,
     settingsLoaded,
     testConnection,
+    updateDeviceName,
   } = useApp();
   const [address, setAddress] = useState(desktopAddress);
   const [port, setPort] = useState(desktopPort);
+  const [phoneName, setPhoneName] = useState(deviceName);
+  const [savingName, setSavingName] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const insets = useSafeAreaInsets();
@@ -64,7 +68,28 @@ export default function SettingsScreen({ navigation }) {
     }
   }, [desktopAddress, desktopPort, settingsLoaded]);
 
+  useEffect(() => {
+    setPhoneName(deviceName);
+  }, [deviceName]);
+
   const validatePort = () => /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+
+  const handleSaveDeviceName = async () => {
+    const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
+    if (!normalizedName) {
+      Alert.alert('Phone name required', 'Enter a name for this phone.');
+      return;
+    }
+    setSavingName(true);
+    try {
+      await updateDeviceName(normalizedName);
+      Alert.alert('Saved', 'This phone name was saved.');
+    } catch (error) {
+      Alert.alert('Unable to save', error.message || 'Please try again.');
+    } finally {
+      setSavingName(false);
+    }
+  };
 
   const handleSave = async () => {
     if (!validatePort()) {
@@ -127,6 +152,30 @@ export default function SettingsScreen({ navigation }) {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.title}>Settings</Text>
+
+          <Text style={styles.sectionTitle}>Mobile name</Text>
+          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+            <Text style={styles.label}>Phone name</Text>
+            <TextInput
+              autoCapitalize="words"
+              autoCorrect={false}
+              maxLength={100}
+              onChangeText={setPhoneName}
+              placeholder="My Android Phone"
+              placeholderTextColor={colors.textMuted}
+              returnKeyType="done"
+              style={styles.input}
+              value={phoneName}
+            />
+            <GlassButton
+              disabled={savingName || phoneName.trim().length === 0}
+              iconName="phone-portrait-outline"
+              label="Save Name"
+              loading={savingName}
+              onPress={handleSaveDeviceName}
+              style={styles.nameButton}
+            />
+          </GlassPanel>
 
           <Text style={styles.sectionTitle}>Desktop permissions</Text>
           <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
@@ -322,6 +371,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
   },
   buttonFlex: { flex: 1 },
+  nameButton: {
+    marginTop: spacing.lg,
+  },
   advancedText: {
     color: colors.textSecondary,
     fontSize: 13,

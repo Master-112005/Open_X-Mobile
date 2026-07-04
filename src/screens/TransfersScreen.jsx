@@ -1,11 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Linking,
+  Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -39,14 +42,15 @@ function HeaderButton({ accessibilityLabel, iconName, onPress }) {
   );
 }
 
-function FileRow({ item, onManage }) {
+function FileRow({ item, onManage, onOpen }) {
   return (
     <Pressable
-      accessibilityHint="Long press to share or delete this file"
+      accessibilityHint="Tap to open. Long press to share or delete this file"
       accessibilityLabel={`${item.fileName}. ${item.status}`}
       accessibilityRole="button"
       delayLongPress={260}
       onLongPress={() => onManage(item)}
+      onPress={() => onOpen(item)}
       style={({ pressed }) => [styles.rowPressable, pressed && styles.pressed]}
     >
       <GlassPanel style={styles.row} contentStyle={styles.rowContent}>
@@ -59,7 +63,7 @@ function FileRow({ item, onManage }) {
             {formatFileSize(item.fileSize)} - {formatTimestamp(item.timestamp)}
           </Text>
           <Text style={styles.fileHint}>
-            {item.status === 'received' ? 'Long press for share or delete' : 'Long press to delete'}
+            {item.status === 'received' ? 'Tap to open - Long press for options' : 'Long press to delete'}
           </Text>
           {item.error ? <Text numberOfLines={2} style={styles.errorText}>{item.error}</Text> : null}
         </View>
@@ -81,6 +85,8 @@ export default function TransfersScreen({ navigation }) {
     transfersLoaded,
   } = useApp();
   const insets = useSafeAreaInsets();
+  const [managedFile, setManagedFile] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const receivedFiles = useMemo(
     () => transferHistory.filter((item) => item.direction === 'received'),
@@ -134,51 +140,53 @@ export default function TransfersScreen({ navigation }) {
     });
   };
 
-  const confirmDeleteFile = (item) => {
-    Alert.alert(
-      'Delete file?',
-      item.status === 'received'
-        ? `Delete ${item.fileName} from OpenX received files?`
-        : `Remove ${item.fileName} from the transfer list?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await deleteReceivedFile(item.id);
-            } catch (error) {
-              Alert.alert('Delete failed', error.message);
-            }
-          },
-        },
-      ],
-    );
+  const openFile = async (item) => {
+    if (item.status !== 'received' || !item.localUri) {
+      setManagedFile(item);
+      setConfirmingDelete(false);
+      return;
+    }
+
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(item.localUri);
+      if (!fileInfo.exists) {
+        Alert.alert('File missing', 'This file is no longer in OpenX received storage.');
+        return;
+      }
+      const openUri = Platform.OS === 'android' && typeof FileSystem.getContentUriAsync === 'function'
+        ? await FileSystem.getContentUriAsync(item.localUri)
+        : item.localUri;
+      const supported = await Linking.canOpenURL(openUri);
+      if (supported) {
+        await Linking.openURL(openUri);
+        closeManageSheet();
+        return;
+      }
+      await shareFile(item);
+      closeManageSheet();
+    } catch (error) {
+      Alert.alert('Open failed', error.message || 'Unable to open this file.');
+    }
   };
 
   const manageFile = (item) => {
-    const buttons = [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => confirmDeleteFile(item),
-      },
-    ];
+    setManagedFile(item);
+    setConfirmingDelete(false);
+  };
 
-    if (item.status === 'received' && item.localUri) {
-      buttons.splice(1, 0, {
-        text: 'Share',
-        onPress: () => {
-          shareFile(item).catch((error) => {
-            Alert.alert('Share failed', error.message);
-          });
-        },
-      });
+  const closeManageSheet = () => {
+    setManagedFile(null);
+    setConfirmingDelete(false);
+  };
+
+  const deleteManagedFile = async () => {
+    if (!managedFile) return;
+    try {
+      await deleteReceivedFile(managedFile.id);
+      closeManageSheet();
+    } catch (error) {
+      Alert.alert('Delete failed', error.message);
     }
-
-    Alert.alert(item.fileName, 'Manage this received file.', buttons);
   };
 
   return (
@@ -214,10 +222,83 @@ export default function TransfersScreen({ navigation }) {
               <Text style={styles.emptyText}>No received files yet.</Text>
             </View>
           }
-          renderItem={({ item }) => <FileRow item={item} onManage={manageFile} />}
+          renderItem={({ item }) => <FileRow item={item} onManage={manageFile} onOpen={openFile} />}
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      <Modal
+        animationType="fade"
+        onRequestClose={closeManageSheet}
+        transparent
+        visible={Boolean(managedFile)}
+      >
+        <Pressable style={styles.sheetOverlay} onPress={closeManageSheet}>
+          <Pressable style={styles.sheetCard} onPress={(event) => event.stopPropagation?.()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetIcon}>
+                <Ionicons color={colors.text} name="document-outline" size={22} />
+              </View>
+              <View style={styles.sheetCopy}>
+                <Text numberOfLines={1} style={styles.sheetTitle}>{managedFile?.fileName}</Text>
+                <Text style={styles.sheetMeta}>
+                  {managedFile ? `${formatFileSize(managedFile.fileSize)} - ${managedFile.status}` : ''}
+                </Text>
+              </View>
+            </View>
+
+            {confirmingDelete ? (
+              <>
+                <Text style={styles.sheetMessage}>
+                  {managedFile?.status === 'received'
+                    ? 'Delete this file from OpenX received storage?'
+                    : 'Remove this transfer from the list?'}
+                </Text>
+                <View style={styles.sheetActions}>
+                  <Pressable style={styles.sheetButton} onPress={() => setConfirmingDelete(false)}>
+                    <Ionicons color={colors.text} name="arrow-back" size={18} />
+                    <Text style={styles.sheetButtonText}>Back</Text>
+                  </Pressable>
+                  <Pressable style={[styles.sheetButton, styles.dangerAction]} onPress={deleteManagedFile}>
+                    <Ionicons color={colors.danger} name="trash-outline" size={18} />
+                    <Text style={[styles.sheetButtonText, styles.dangerText]}>Delete</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <View style={styles.sheetActions}>
+                {managedFile?.status === 'received' && managedFile?.localUri ? (
+                  <>
+                    <Pressable style={styles.sheetButton} onPress={() => openFile(managedFile)}>
+                      <Ionicons color={colors.text} name="open-outline" size={18} />
+                      <Text style={styles.sheetButtonText}>Open</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.sheetButton}
+                      onPress={async () => {
+                        try {
+                          await shareFile(managedFile);
+                          closeManageSheet();
+                        } catch (error) {
+                          Alert.alert('Share failed', error.message);
+                        }
+                      }}
+                    >
+                      <Ionicons color={colors.text} name="share-outline" size={18} />
+                      <Text style={styles.sheetButtonText}>Share</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+                <Pressable style={[styles.sheetButton, styles.dangerAction]} onPress={() => setConfirmingDelete(true)}>
+                  <Ionicons color={colors.danger} name="trash-outline" size={18} />
+                  <Text style={[styles.sheetButtonText, styles.dangerText]}>Delete</Text>
+                </Pressable>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -336,5 +417,87 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 14,
     fontWeight: '700',
+  },
+  sheetOverlay: {
+    backgroundColor: colors.overlay,
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: spacing.lg,
+  },
+  sheetCard: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderRadius: 28,
+    borderWidth: 1,
+    padding: spacing.lg,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    backgroundColor: colors.borderBright,
+    borderRadius: radius.round,
+    height: 4,
+    marginBottom: spacing.lg,
+    width: 42,
+  },
+  sheetHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  sheetIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  sheetCopy: {
+    flex: 1,
+  },
+  sheetTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  sheetMeta: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: spacing.xs,
+  },
+  sheetMessage: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: spacing.lg,
+  },
+  sheetActions: {
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  sheetButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 48,
+    paddingHorizontal: spacing.md,
+  },
+  sheetButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  dangerAction: {
+    backgroundColor: 'rgba(255,102,117,0.1)',
+    borderColor: 'rgba(255,102,117,0.28)',
+  },
+  dangerText: {
+    color: colors.danger,
   },
 });

@@ -63,7 +63,7 @@ export default function HomeScreen({ navigation }) {
   const [sendingFile, setSendingFile] = useState(false);
   const listRef = useRef(null);
   const insets = useSafeAreaInsets();
-  const topControlsHeight = insets.top + spacing.sm + 52 + spacing.lg;
+  const topControlsHeight = insets.top + spacing.sm + 58 + spacing.lg;
 
   const commandRestriction = !pairingLoaded || !paired
     ? 'Pair this phone with OpenX Desktop.'
@@ -145,29 +145,31 @@ export default function HomeScreen({ navigation }) {
         style={styles.screen}
       >
         <View style={[styles.topLayer, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
-          <View style={styles.leftCluster}>
-            <FloatingButton
-              accessibilityLabel="Open received files"
-              iconName="folder-open-outline"
-              label="Files"
-              onPress={() => navigation.navigate('Transfers')}
-            />
-            <ConnectionDot status={connectionStatus} />
-          </View>
-          <View style={styles.rightCluster}>
-            <FloatingButton
-              accessibilityLabel="Open QR scanner"
-              iconName="qr-code-outline"
-              label="QR scanner"
-              onPress={() => navigation.navigate('QRPairing')}
-            />
-            <FloatingButton
-              accessibilityLabel="Open settings"
-              iconName="settings-outline"
-              label="Settings"
-              onPress={() => navigation.navigate('Settings')}
-            />
-          </View>
+          <LinearGradient colors={gradients.glass} style={styles.topControlBar} pointerEvents="auto">
+            <View style={styles.leftCluster}>
+              <FloatingButton
+                accessibilityLabel="Open received files"
+                iconName="folder-open-outline"
+                label="Files"
+                onPress={() => navigation.navigate('Transfers')}
+              />
+              <ConnectionDot status={connectionStatus} />
+            </View>
+            <View style={styles.rightCluster}>
+              <FloatingButton
+                accessibilityLabel="Open QR scanner"
+                iconName="qr-code-outline"
+                label="QR scanner"
+                onPress={() => navigation.navigate('QRPairing')}
+              />
+              <FloatingButton
+                accessibilityLabel="Open settings"
+                iconName="settings-outline"
+                label="Settings"
+                onPress={() => navigation.navigate('Settings')}
+              />
+            </View>
+          </LinearGradient>
         </View>
 
         <FlatList
@@ -264,14 +266,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   topLayer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     left: 0,
     paddingHorizontal: spacing.lg,
     position: 'absolute',
     right: 0,
     top: 0,
     zIndex: 20,
+  },
+  topControlBar: {
+    ...shadows.card,
+    alignItems: 'center',
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 58,
+    padding: 5,
   },
   leftCluster: {
     alignItems: 'center',
@@ -284,9 +295,9 @@ const styles = StyleSheet.create({
   },
   floatButton: {
     borderRadius: radius.round,
-    height: 52,
+    height: 46,
     overflow: 'hidden',
-    width: 52,
+    width: 46,
   },
   floatGlass: {
     ...shadows.card,

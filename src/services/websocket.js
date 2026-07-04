@@ -38,6 +38,14 @@ class OpenXWebSocketService {
   statusListeners = new Set();
   messageListeners = new Set();
   recentTransferErrors = new Map();
+  clientIdentity = { deviceId: '', deviceName: '' };
+
+  setClientIdentity(deviceId, deviceName) {
+    this.clientIdentity = {
+      deviceId: String(deviceId || '').trim().slice(0, 128),
+      deviceName: String(deviceName || '').trim().slice(0, 100),
+    };
+  }
 
   connect(host, port) {
     return this.open(host, port, false);
@@ -79,7 +87,7 @@ class OpenXWebSocketService {
       let socket;
 
       try {
-        socket = new WebSocket(`ws://${this.host}:${this.port}`);
+        socket = new WebSocket(this.buildUrl());
       } catch {
         const error = new Error(WAITING_FOR_DESKTOP_MESSAGE);
         this.setStatus('error');
@@ -180,6 +188,7 @@ class OpenXWebSocketService {
       requestId: requestMetadata.requestId,
       timestamp: requestMetadata.timestamp,
       deviceId: requestMetadata.deviceId,
+      deviceName: requestMetadata.deviceName || this.clientIdentity.deviceName || undefined,
       sessionToken: requestMetadata.sessionToken,
     };
 
@@ -217,6 +226,40 @@ class OpenXWebSocketService {
     } catch {
       this.setStatus('error');
       this.socket.close();
+      return false;
+    }
+  }
+
+  sendDeviceUpdate({
+    requestId,
+    timestamp = Date.now(),
+    deviceId,
+    deviceName,
+    sessionToken,
+  }) {
+    const normalizedName = String(deviceName || '').trim();
+    if (
+      !requestId ||
+      !deviceId ||
+      !normalizedName ||
+      !sessionToken ||
+      this.status !== 'connected' ||
+      this.socket?.readyState !== WebSocket.OPEN
+    ) {
+      return false;
+    }
+
+    try {
+      this.sendJson({
+        type: 'device-update',
+        requestId,
+        timestamp,
+        deviceId,
+        deviceName: normalizedName,
+        sessionToken,
+      });
+      return true;
+    } catch {
       return false;
     }
   }
@@ -431,6 +474,18 @@ class OpenXWebSocketService {
       serverIp: this.host,
       serverPort: this.port,
     };
+  }
+
+  buildUrl() {
+    const params = [];
+    if (this.clientIdentity.deviceId) {
+      params.push(`deviceId=${encodeURIComponent(this.clientIdentity.deviceId)}`);
+    }
+    if (this.clientIdentity.deviceName) {
+      params.push(`deviceName=${encodeURIComponent(this.clientIdentity.deviceName)}`);
+    }
+    const query = params.length > 0 ? `?${params.join('&')}` : '';
+    return `ws://${this.host}:${this.port}${query}`;
   }
 
   subscribeToStatus(listener) {

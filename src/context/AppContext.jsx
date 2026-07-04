@@ -90,6 +90,12 @@ const normalizeConnectionSettings = (settings) => {
   };
 };
 
+const normalizeDeviceName = (value) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
@@ -122,6 +128,7 @@ export function AppProvider({ children }) {
 
   const applyPairingData = useCallback((data) => {
     pairingDataRef.current = data;
+    websocketService.setClientIdentity(data.deviceId, data.deviceName);
     setDeviceId(data.deviceId);
     setDeviceName(data.deviceName);
     setPaired(data.paired);
@@ -573,6 +580,7 @@ export function AppProvider({ children }) {
         requestId: Crypto.randomUUID(),
         timestamp: Date.now(),
         deviceId: pairingDataRef.current.deviceId,
+        deviceName: pairingDataRef.current.deviceName,
         sessionToken: sessionRef.current.sessionToken,
       });
       setMessages((current) => [
@@ -614,7 +622,7 @@ export function AppProvider({ children }) {
   }, []);
 
   const pairDevice = useCallback((name, token) => {
-    const normalizedName = name.trim();
+    const normalizedName = normalizeDeviceName(name);
     const normalizedToken = token.trim().toUpperCase();
     const currentPairing = pairingDataRef.current;
 
@@ -676,6 +684,37 @@ export function AppProvider({ children }) {
       }
     });
   }, [applyPairingData, applySession]);
+
+  const updateDeviceName = useCallback(async (name) => {
+    const normalizedName = normalizeDeviceName(name);
+    if (!normalizedName) {
+      throw new Error('Enter a phone name.');
+    }
+
+    const previousPairing = pairingDataRef.current;
+    const nextPairing = {
+      ...previousPairing,
+      deviceName: normalizedName,
+    };
+    applyPairingData(nextPairing);
+    await AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairing));
+
+    if (
+      nextPairing.paired &&
+      isSessionValid(sessionRef.current) &&
+      websocketService.getStatus() === 'connected'
+    ) {
+      websocketService.sendDeviceUpdate({
+        requestId: Crypto.randomUUID(),
+        timestamp: Date.now(),
+        deviceId: nextPairing.deviceId,
+        deviceName: normalizedName,
+        sessionToken: sessionRef.current.sessionToken,
+      });
+    }
+
+    return nextPairing;
+  }, [applyPairingData]);
 
   const sendFile = useCallback(
     async (file) => {
@@ -799,6 +838,7 @@ export function AppProvider({ children }) {
       saveSettings,
       testConnection,
       pairDevice,
+      updateDeviceName,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
@@ -826,6 +866,7 @@ export function AppProvider({ children }) {
       saveSettings,
       testConnection,
       pairDevice,
+      updateDeviceName,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
