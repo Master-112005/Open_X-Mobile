@@ -136,7 +136,7 @@ export default function CalendarScreen({ navigation }) {
         <View style={styles.headerText}>
           <Text style={styles.title}>Calendar</Text>
           <Text style={styles.subtitle}>
-            {scheduleLastSyncedAt ? `Synced ${formatTime(scheduleLastSyncedAt)}` : schedulesLoaded ? 'Saved on this phone' : 'Loading'}
+            {scheduleLastSyncedAt ? `Synced ${formatTime(scheduleLastSyncedAt)}` : schedulesLoaded ? 'Saved on this mobile' : 'Loading'}
           </Text>
         </View>
         <Pressable accessibilityRole="button" onPress={requestScheduleSync} style={styles.iconButton}>

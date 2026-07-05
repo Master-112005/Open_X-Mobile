@@ -319,6 +319,33 @@ class OpenXWebSocketService {
     }
   }
 
+  sendPhoneNotification({
+    requestId,
+    timestamp = Date.now(),
+    deviceId,
+    deviceName,
+    sessionToken,
+    notification,
+  }) {
+    if (!requestId || !deviceId || !sessionToken || !notification || this.status !== 'connected' || this.socket?.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      this.sendJson({
+        type: 'phone-notification',
+        requestId,
+        timestamp,
+        deviceId,
+        deviceName: deviceName || this.clientIdentity.deviceName || undefined,
+        sessionToken,
+        notification,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async sendFileTransfer({
     requestId,
     timestamp,
@@ -581,6 +608,8 @@ class OpenXWebSocketService {
         message.type === 'file-transfer-success' ||
         message.type === 'permissions' ||
         message.type === 'schedule-sync:snapshot' ||
+        message.type === 'phone-notification:shown' ||
+        message.type === 'phone-notification:ignored' ||
         message.type === 'session-expired' ||
         message.type === 'session-renewed' ||
         message.type === 'authentication-failed' ||

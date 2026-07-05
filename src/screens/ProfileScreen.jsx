@@ -65,7 +65,7 @@ export default function ProfileScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
       >
         <Text style={styles.title}>Profile</Text>
-        <Text style={styles.subtitle}>Phone identity and OpenX connection info.</Text>
+        <Text style={styles.subtitle}>OpenX connection and device info.</Text>
 
         <GlassPanel style={styles.heroCard} contentStyle={styles.heroContent}>
           <View style={styles.avatar}>

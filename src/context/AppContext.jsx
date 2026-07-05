@@ -52,7 +52,7 @@ import { CloudFileTransferManager } from '../services/cloudFileTransfer';
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const DEFAULT_PORT = '8080';
-const DEFAULT_DEVICE_NAME = 'My Android Phone';
+const DEFAULT_DEVICE_NAME = 'My Mobile';
 const DEFAULT_CONNECTION_MODE = 'local';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
@@ -118,6 +118,24 @@ const normalizeDeviceName = (value) =>
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 100);
+
+const normalizeMobileNotification = (notification = {}) => {
+  const now = Date.now();
+  const appName = String(notification.appName || notification.packageName || 'Mobile').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const title = String(notification.title || appName || 'Notification').replace(/\s+/g, ' ').trim().slice(0, 140);
+  const message = String(notification.message || notification.text || notification.body || '').replace(/\s+/g, ' ').trim().slice(0, 360);
+  if (!title && !message) return null;
+  return {
+    notificationId: String(notification.notificationId || notification.id || `mobile_notification_${now}_${Math.random().toString(36).slice(2, 8)}`),
+    appName,
+    packageName: String(notification.packageName || '').trim().slice(0, 120),
+    title,
+    message,
+    priority: String(notification.priority || 'normal').toLowerCase(),
+    category: String(notification.category || 'phone').toLowerCase(),
+    timestamp: Number(notification.timestamp) || now,
+  };
+};
 
 const AppContext = createContext(null);
 
@@ -969,7 +987,7 @@ export function AppProvider({ children }) {
           setMessages((current) => [
             ...current,
             createMessage('user', normalizedText),
-            createMessage('assistant', 'Cloud is not ready. Connect and pair this phone with OpenX Desktop.'),
+            createMessage('assistant', 'Cloud is not ready. Connect and pair this mobile app with OpenX Desktop.'),
           ]);
           return true;
         }
@@ -1217,7 +1235,7 @@ export function AppProvider({ children }) {
   const updateDeviceName = useCallback(async (name) => {
     const normalizedName = normalizeDeviceName(name);
     if (!normalizedName) {
-      throw new Error('Enter a phone name.');
+      throw new Error('Enter a mobile name.');
     }
 
     const previousPairing = pairingDataRef.current;
@@ -1282,6 +1300,41 @@ export function AppProvider({ children }) {
     }
     return normalized;
   }, [sendCloudScheduleSync]);
+
+  const sendMobileNotification = useCallback((notification) => {
+    const normalized = normalizeMobileNotification(notification);
+    if (!normalized || !pairingDataRef.current.paired) return false;
+
+    if (settingsRef.current.connectionMode === 'cloud') {
+      const cloudPairing = pairingDataRef.current.cloudPairing || {};
+      if (!relayClient.isConnected() || !cloudPairing.desktopDeviceId) return false;
+      return relayClient.createNotification({
+        destinationDeviceId: cloudPairing.desktopDeviceId,
+        notificationId: normalized.notificationId,
+        category: 'phone',
+        priority: normalized.priority,
+        title: normalized.title,
+        message: normalized.message,
+        details: {
+          appName: normalized.appName,
+          packageName: normalized.packageName,
+          deviceName: pairingDataRef.current.deviceName,
+          timestamp: normalized.timestamp,
+        },
+        ttlMs: 5 * 60 * 1000,
+      });
+    }
+
+    if (websocketService.getStatus() !== 'connected' || !isSessionValid(sessionRef.current)) return false;
+    return websocketService.sendPhoneNotification({
+      requestId: Crypto.randomUUID(),
+      timestamp: Date.now(),
+      deviceId: pairingDataRef.current.deviceId,
+      deviceName: pairingDataRef.current.deviceName,
+      sessionToken: sessionRef.current.sessionToken,
+      notification: normalized,
+    });
+  }, []);
 
   const sendFile = useCallback(
     async (file) => {
@@ -1437,6 +1490,7 @@ export function AppProvider({ children }) {
       updateDeviceName,
       upsertScheduleItem,
       requestScheduleSync,
+      sendMobileNotification,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
@@ -1482,6 +1536,7 @@ export function AppProvider({ children }) {
       updateDeviceName,
       upsertScheduleItem,
       requestScheduleSync,
+      sendMobileNotification,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,

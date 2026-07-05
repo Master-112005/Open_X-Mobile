@@ -72,12 +72,12 @@ export default function HomeScreen({ navigation }) {
 
   const commandRestriction = connectionMode === 'cloud'
     ? (!paired
-        ? 'Pair this phone with OpenX Desktop.'
+        ? 'Pair this mobile app with OpenX Desktop.'
         : !cloudStatus?.connected
           ? 'Connect to OpenX Relay.'
           : null)
     : !pairingLoaded || !paired
-      ? 'Pair this phone with OpenX Desktop.'
+      ? 'Pair this mobile app with OpenX Desktop.'
       : !permissionsLoaded
         ? 'Checking desktop permissions.'
         : !permissions.remoteCommands

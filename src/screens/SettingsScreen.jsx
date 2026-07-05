@@ -79,13 +79,13 @@ export default function SettingsScreen({ navigation }) {
   const handleSaveDeviceName = async () => {
     const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
     if (!normalizedName) {
-      Alert.alert('Phone name required', 'Enter a name for this phone.');
+      Alert.alert('Mobile name required', 'Enter a name for this mobile.');
       return;
     }
     setSavingName(true);
     try {
       await updateDeviceName(normalizedName);
-      Alert.alert('Saved', 'This phone name was saved.');
+      Alert.alert('Saved', 'This mobile name was saved.');
     } catch (error) {
       Alert.alert('Unable to save', error.message || 'Please try again.');
     } finally {
@@ -162,7 +162,7 @@ export default function SettingsScreen({ navigation }) {
         >
           <View style={styles.titleBlock}>
             <Text style={styles.title}>Settings</Text>
-            <Text style={styles.subtitle}>Manage this phone, pairing, and connection behavior.</Text>
+            <Text style={styles.subtitle}>Manage pairing and connection behavior.</Text>
           </View>
 
           <GlassPanel style={styles.summaryCard} contentStyle={styles.summaryContent}>
@@ -183,13 +183,13 @@ export default function SettingsScreen({ navigation }) {
 
           <Text style={styles.sectionTitle}>Mobile name</Text>
           <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            <Text style={styles.label}>Phone name</Text>
+            <Text style={styles.label}>Mobile name</Text>
             <TextInput
               autoCapitalize="words"
               autoCorrect={false}
               maxLength={100}
               onChangeText={setPhoneName}
-              placeholder="My Android Phone"
+              placeholder="My Mobile"
               placeholderTextColor={colors.textMuted}
               returnKeyType="done"
               style={styles.input}
