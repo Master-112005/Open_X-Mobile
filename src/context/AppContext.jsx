@@ -15,6 +15,13 @@ import {
   persistPermissionState,
 } from '../services/permissions';
 import {
+  loadSchedules,
+  mergeScheduleItems,
+  normalizeScheduleItem,
+  persistSchedules,
+  schedulesFromSnapshot,
+} from '../services/scheduleStore';
+import {
   EMPTY_SESSION,
   clearPersistedSession,
   isSessionValid,
@@ -138,6 +145,9 @@ export function AppProvider({ children }) {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [permissionsLastUpdated, setPermissionsLastUpdated] = useState(null);
   const [permissionsLoaded, setPermissionsLoaded] = useState(false);
+  const [scheduleItems, setScheduleItems] = useState([]);
+  const [schedulesLoaded, setSchedulesLoaded] = useState(false);
+  const [scheduleLastSyncedAt, setScheduleLastSyncedAt] = useState(null);
   const [sessionValid, setSessionValid] = useState(false);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState(null);
@@ -147,6 +157,7 @@ export function AppProvider({ children }) {
   const cloudFileTransferRef = useRef(null);
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
+  const scheduleItemsRef = useRef([]);
   const sessionRef = useRef(EMPTY_SESSION);
   const settingsRef = useRef(normalizeConnectionSettings({}));
 
@@ -191,6 +202,22 @@ export function AppProvider({ children }) {
     setSessionValid(isSessionValid(session));
     setSessionExpiresAt(session.expiresAt);
   }, []);
+
+  const applyScheduleItems = useCallback((items, syncedAt = null) => {
+    const merged = mergeScheduleItems(scheduleItemsRef.current, items);
+    scheduleItemsRef.current = merged;
+    setScheduleItems(merged);
+    if (syncedAt) setScheduleLastSyncedAt(syncedAt);
+    persistSchedules(merged).catch(() => {
+      console.warn('Unable to persist OpenX schedules.');
+    });
+    return merged;
+  }, []);
+
+  const applyScheduleSnapshot = useCallback((snapshot) => {
+    const items = schedulesFromSnapshot(snapshot);
+    return applyScheduleItems(items, snapshot?.generatedAt || new Date().toISOString());
+  }, [applyScheduleItems]);
 
   const persistConnectionSettings = useCallback(async (updates = {}) => {
     const nextSettings = normalizeConnectionSettings({
@@ -246,6 +273,65 @@ export function AppProvider({ children }) {
     pendingCloudRequestsRef.current.delete(requestId);
     return pending;
   }, []);
+
+  const sendCloudScheduleSync = useCallback((action = 'request', schedule = null) => {
+    const cloudPairing = pairingDataRef.current.cloudPairing || {};
+    if (
+      settingsRef.current.connectionMode !== 'cloud' ||
+      !relayClient.isConnected() ||
+      !pairingDataRef.current.paired ||
+      !cloudPairing.ownerId ||
+      !cloudPairing.desktopDeviceId ||
+      !pairingDataRef.current.deviceId
+    ) {
+      return false;
+    }
+    const requestId = Crypto.randomUUID();
+    return relayClient.sendRelayPacket({
+      packetId: `cloud_schedule_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      protocolVersion: 1,
+      packetType: 'request',
+      sourceDeviceId: cloudPairing.phoneDeviceId || pairingDataRef.current.deviceId,
+      destinationDeviceId: cloudPairing.desktopDeviceId,
+      ownerId: cloudPairing.ownerId,
+      timestamp: Date.now(),
+      requestId,
+      responseId: null,
+      metadata: {
+        feature: 'schedule-sync',
+        deviceName: pairingDataRef.current.deviceName,
+      },
+      checksum: null,
+      encryption: null,
+      payload: {
+        type: 'schedule-sync',
+        action,
+        schedule,
+        deviceName: pairingDataRef.current.deviceName,
+        metadata: { client: 'openx-mobile' },
+      },
+    });
+  }, []);
+
+  const requestScheduleSync = useCallback(() => {
+    if (settingsRef.current.connectionMode === 'cloud') {
+      return sendCloudScheduleSync('request');
+    }
+    if (
+      websocketService.getStatus() !== 'connected' ||
+      !pairingDataRef.current.paired ||
+      !isSessionValid(sessionRef.current)
+    ) {
+      return false;
+    }
+    return websocketService.sendScheduleSyncRequest({
+      requestId: Crypto.randomUUID(),
+      timestamp: Date.now(),
+      deviceId: pairingDataRef.current.deviceId,
+      deviceName: pairingDataRef.current.deviceName,
+      sessionToken: sessionRef.current.sessionToken,
+    });
+  }, [sendCloudScheduleSync]);
 
   const appendCloudAssistantResult = useCallback((result, timestamp = Date.now()) => {
     const responseText = result?.response || result?.message || 'Command completed.';
@@ -361,6 +447,10 @@ export function AppProvider({ children }) {
       if (message.type !== 'relay:packet') return;
       const packet = message.packet || {};
       if (packet.payload?.type === 'cloud-file-transfer') return;
+      if (packet.payload?.type === 'schedule-sync') {
+        if (packet.payload?.snapshot) applyScheduleSnapshot(packet.payload.snapshot);
+        return;
+      }
       const response = packet.payload || {};
       const requestId = response.requestId || packet.requestId || '';
       if (requestId) clearCloudRequest(requestId);
@@ -369,6 +459,10 @@ export function AppProvider({ children }) {
         response: response.error?.message || 'Command completed.',
         error: response.error?.code || null,
       };
+      if (result?.data?.scheduleSync && result.data.snapshot) {
+        applyScheduleSnapshot(result.data.snapshot);
+        return;
+      }
       appendCloudAssistantResult(result, response.timestamp || packet.timestamp || Date.now());
     });
 
@@ -496,6 +590,11 @@ export function AppProvider({ children }) {
           persistPermissionState(permissionState).catch(() => {
             console.warn('Unable to persist desktop permissions.');
           });
+          return;
+        }
+
+        if (message.type === 'schedule-sync:snapshot') {
+          applyScheduleSnapshot(message.snapshot);
           return;
         }
 
@@ -653,12 +752,14 @@ export function AppProvider({ children }) {
           savedTransferHistory,
           savedPermissionState,
           savedSession,
+          savedSchedules,
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
           loadTransferHistory(),
           loadPermissionState(),
           loadSession(),
+          loadSchedules(),
         ]);
         if (!mounted) return;
 
@@ -678,6 +779,7 @@ export function AppProvider({ children }) {
           deviceName: parsedPairing.deviceName || DEFAULT_DEVICE_NAME,
           paired: parsedPairing.paired === true,
           pairedAt: parsedPairing.pairedAt ?? null,
+          cloudPairing: parsedPairing.cloudPairing || null,
         };
 
         setDesktopAddress(savedAddress);
@@ -685,6 +787,8 @@ export function AppProvider({ children }) {
         applyPairingData(nextPairingData);
         transferHistoryRef.current = savedTransferHistory;
         setTransferHistory(savedTransferHistory);
+        scheduleItemsRef.current = savedSchedules;
+        setScheduleItems(savedSchedules);
         applyPermissionState(savedPermissionState);
         applySession(savedSession);
         await AsyncStorage.setItem(
@@ -716,6 +820,7 @@ export function AppProvider({ children }) {
           setPairingLoaded(true);
           setTransfersLoaded(true);
           setPermissionsLoaded(true);
+          setSchedulesLoaded(true);
           setSessionLoaded(true);
         }
       }
@@ -744,10 +849,12 @@ export function AppProvider({ children }) {
   }, [
     applyPairingData,
     applyPermissionState,
+    applyScheduleSnapshot,
     applySession,
     appendCloudAssistantResult,
     clearCloudRequest,
     recordTransfer,
+    requestScheduleSync,
   ]);
 
   useEffect(() => {
@@ -782,6 +889,67 @@ export function AppProvider({ children }) {
 
     return () => subscription.remove();
   }, []);
+
+  useEffect(() => {
+    if (!settingsLoaded || !pairingLoaded || !paired) return;
+    if (connectionMode === 'cloud') {
+      if (cloudStatus?.connected) requestScheduleSync();
+      return;
+    }
+    if (sessionLoaded && sessionValid && connectionStatus === 'connected') {
+      requestScheduleSync();
+    }
+  }, [
+    cloudStatus?.connected,
+    connectionMode,
+    connectionStatus,
+    paired,
+    pairingLoaded,
+    requestScheduleSync,
+    sessionLoaded,
+    sessionValid,
+    settingsLoaded,
+  ]);
+
+  useEffect(() => {
+    if (!schedulesLoaded) return undefined;
+    const now = Date.now();
+    const scheduled = scheduleItemsRef.current
+      .filter((item) => String(item.status || '').toLowerCase() === 'scheduled')
+      .map((item) => ({ item, dueMs: new Date(item.dueAt).getTime() }))
+      .filter(({ dueMs }) => Number.isFinite(dueMs))
+      .sort((a, b) => a.dueMs - b.dueMs);
+    const next = scheduled[0];
+    if (!next) return undefined;
+
+    const timer = setTimeout(() => {
+      const dueNow = [];
+      const updated = scheduleItemsRef.current.map((item) => {
+        const dueMs = new Date(item.dueAt).getTime();
+        if (String(item.status || '').toLowerCase() === 'scheduled' && Number.isFinite(dueMs) && dueMs <= Date.now()) {
+          const dueItem = { ...item, status: 'due', updatedAt: new Date().toISOString() };
+          dueNow.push(dueItem);
+          return dueItem;
+        }
+        return item;
+      });
+      if (dueNow.length === 0) return;
+      scheduleItemsRef.current = updated;
+      setScheduleItems(updated);
+      persistSchedules(updated).catch(() => {
+        console.warn('Unable to persist due OpenX schedules.');
+      });
+      setMessages((current) => [
+        ...current,
+        ...dueNow.slice(0, 3).map((item) => createMessage(
+          'assistant',
+          `${item.kind || 'Reminder'} due: ${item.message || item.title}`,
+        )),
+      ]);
+    }, Math.max(0, Math.min(next.dueMs - now, 2147483647)));
+
+    return () => clearTimeout(timer);
+  }, [scheduleItems, schedulesLoaded]);
 
   const sendMessage = useCallback(
     (text) => {
@@ -1077,6 +1245,44 @@ export function AppProvider({ children }) {
     return nextPairing;
   }, [applyPairingData]);
 
+  const upsertScheduleItem = useCallback(async (schedule) => {
+    const normalized = normalizeScheduleItem({
+      ...schedule,
+      sourceDeviceId: pairingDataRef.current.deviceId,
+      sourceDeviceName: pairingDataRef.current.deviceName,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!normalized) {
+      throw new Error('Enter a valid schedule item.');
+    }
+
+    const merged = mergeScheduleItems(scheduleItemsRef.current, [normalized]);
+    scheduleItemsRef.current = merged;
+    setScheduleItems(merged);
+    await persistSchedules(merged);
+
+    if (settingsRef.current.connectionMode === 'cloud') {
+      sendCloudScheduleSync('upsert', normalized);
+      return normalized;
+    }
+
+    if (
+      websocketService.getStatus() === 'connected' &&
+      pairingDataRef.current.paired &&
+      isSessionValid(sessionRef.current)
+    ) {
+      websocketService.sendScheduleUpsert({
+        requestId: Crypto.randomUUID(),
+        timestamp: Date.now(),
+        deviceId: pairingDataRef.current.deviceId,
+        deviceName: pairingDataRef.current.deviceName,
+        sessionToken: sessionRef.current.sessionToken,
+        schedule: normalized,
+      });
+    }
+    return normalized;
+  }, [sendCloudScheduleSync]);
+
   const sendFile = useCallback(
     async (file) => {
       const pairingData = pairingDataRef.current;
@@ -1218,6 +1424,9 @@ export function AppProvider({ children }) {
       permissions,
       permissionsLastUpdated,
       permissionsLoaded,
+      scheduleItems,
+      schedulesLoaded,
+      scheduleLastSyncedAt,
       sessionValid,
       sessionLoaded,
       sendMessage,
@@ -1226,6 +1435,8 @@ export function AppProvider({ children }) {
       pairDevice,
       pairCloudDevice,
       updateDeviceName,
+      upsertScheduleItem,
+      requestScheduleSync,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
@@ -1258,6 +1469,9 @@ export function AppProvider({ children }) {
       permissions,
       permissionsLastUpdated,
       permissionsLoaded,
+      scheduleItems,
+      schedulesLoaded,
+      scheduleLastSyncedAt,
       sessionValid,
       sessionLoaded,
       sendMessage,
@@ -1266,6 +1480,8 @@ export function AppProvider({ children }) {
       pairDevice,
       pairCloudDevice,
       updateDeviceName,
+      upsertScheduleItem,
+      requestScheduleSync,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,

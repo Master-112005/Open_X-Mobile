@@ -26,14 +26,14 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
     throw new Error(INVALID_QR_MESSAGE);
   }
 
-  const relayUrl = typeof payload.relayUrl === 'string'
-    ? payload.relayUrl.trim()
+  const relayUrl = typeof (payload.relayUrl || payload.u) === 'string'
+    ? (payload.relayUrl || payload.u).trim()
     : '';
-  const cloudPairToken = typeof payload.pairToken === 'string'
-    ? payload.pairToken.trim()
+  const cloudPairToken = typeof (payload.pairToken || payload.t) === 'string'
+    ? (payload.pairToken || payload.t).trim()
     : '';
-  const cloudVersion = Number(payload.version);
-  const rawCloudExpiresAt = Number(payload.expiresAt);
+  const cloudVersion = Number(payload.version ?? payload.v);
+  const rawCloudExpiresAt = Number(payload.expiresAt ?? payload.e);
 
   if (relayUrl || cloudPairToken || cloudVersion) {
     if (

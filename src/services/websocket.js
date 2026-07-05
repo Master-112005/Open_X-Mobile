@@ -267,6 +267,58 @@ class OpenXWebSocketService {
     }
   }
 
+  sendScheduleSyncRequest({
+    requestId,
+    timestamp = Date.now(),
+    deviceId,
+    deviceName,
+    sessionToken,
+  }) {
+    if (!requestId || !deviceId || !sessionToken || this.status !== 'connected' || this.socket?.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      this.sendJson({
+        type: 'schedule-sync:request',
+        requestId,
+        timestamp,
+        deviceId,
+        deviceName: deviceName || this.clientIdentity.deviceName || undefined,
+        sessionToken,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  sendScheduleUpsert({
+    requestId,
+    timestamp = Date.now(),
+    deviceId,
+    deviceName,
+    sessionToken,
+    schedule,
+  }) {
+    if (!requestId || !deviceId || !sessionToken || !schedule || this.status !== 'connected' || this.socket?.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      this.sendJson({
+        type: 'schedule-sync:upsert',
+        requestId,
+        timestamp,
+        deviceId,
+        deviceName: deviceName || this.clientIdentity.deviceName || undefined,
+        sessionToken,
+        schedule,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async sendFileTransfer({
     requestId,
     timestamp,
@@ -528,6 +580,7 @@ class OpenXWebSocketService {
         message.type === 'file-transfer-progress' ||
         message.type === 'file-transfer-success' ||
         message.type === 'permissions' ||
+        message.type === 'schedule-sync:snapshot' ||
         message.type === 'session-expired' ||
         message.type === 'session-renewed' ||
         message.type === 'authentication-failed' ||

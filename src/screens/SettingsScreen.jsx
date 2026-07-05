@@ -17,7 +17,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
 import { useApp } from '../context/AppContext';
-import { normalizeRelayUrl } from '../services/relayClient';
 import { colors, radius, spacing } from '../styles/theme';
 
 const PERMISSION_ITEMS = [
@@ -47,16 +46,11 @@ export default function SettingsScreen({ navigation }) {
     connectionStatus,
     connectionMode,
     cloudStatus,
-    cloudSettings,
     deviceName,
     permissions,
     permissionsLastUpdated,
     permissionsLoaded,
     saveSettings,
-    setConnectionMode,
-    saveCloudSettings,
-    connectCloud,
-    disconnectCloud,
     settingsLoaded,
     testConnection,
     updateDeviceName,
@@ -64,16 +58,9 @@ export default function SettingsScreen({ navigation }) {
   const [address, setAddress] = useState(desktopAddress);
   const [port, setPort] = useState(desktopPort);
   const [phoneName, setPhoneName] = useState(deviceName);
-  const [modeDraft, setModeDraft] = useState(connectionMode);
-  const [relayUrl, setRelayUrl] = useState(normalizeRelayUrl(cloudSettings?.relayUrl));
-  const [cloudAutoConnect, setCloudAutoConnect] = useState(cloudSettings?.autoConnect === true);
-  const [cloudReconnect, setCloudReconnect] = useState(cloudSettings?.reconnectEnabled !== false);
-  const [cloudHeartbeat, setCloudHeartbeat] = useState(cloudSettings?.heartbeatEnabled !== false);
-  const [cloudTimeout, setCloudTimeout] = useState(String(cloudSettings?.connectionTimeoutMs || 10000));
   const [savingName, setSavingName] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [cloudBusy, setCloudBusy] = useState(false);
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -87,31 +74,7 @@ export default function SettingsScreen({ navigation }) {
     setPhoneName(deviceName);
   }, [deviceName]);
 
-  useEffect(() => {
-    setModeDraft(connectionMode);
-  }, [connectionMode]);
-
-  useEffect(() => {
-    setRelayUrl(normalizeRelayUrl(cloudSettings?.relayUrl));
-    setCloudAutoConnect(cloudSettings?.autoConnect === true);
-    setCloudReconnect(cloudSettings?.reconnectEnabled !== false);
-    setCloudHeartbeat(cloudSettings?.heartbeatEnabled !== false);
-    setCloudTimeout(String(cloudSettings?.connectionTimeoutMs || 10000));
-  }, [cloudSettings]);
-
   const validatePort = () => /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
-  const validateCloudTimeout = () => /^\d+$/.test(cloudTimeout) &&
-    Number(cloudTimeout) >= 1000 &&
-    Number(cloudTimeout) <= 60000;
-
-  const collectCloudSettings = () => ({
-    relayUrl: normalizeRelayUrl(relayUrl),
-    autoConnect: cloudAutoConnect,
-    reconnectEnabled: cloudReconnect,
-    heartbeatEnabled: cloudHeartbeat,
-    connectionTimeoutMs: Number(cloudTimeout || 10000),
-    heartbeatIntervalMs: cloudSettings?.heartbeatIntervalMs || 30000,
-  });
 
   const handleSaveDeviceName = async () => {
     const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
@@ -166,79 +129,10 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
-  const handleModeChange = async (mode) => {
-    setModeDraft(mode);
-    try {
-      await setConnectionMode(mode);
-    } catch {
-      Alert.alert('Unable to switch', 'Connection mode could not be changed.');
-      setModeDraft(connectionMode);
-    }
-  };
-
-  const handleSaveCloud = async () => {
-    if (!relayUrl.trim()) {
-      Alert.alert('Relay server required', 'Enter the relay server URL.');
-      return;
-    }
-    if (!validateCloudTimeout()) {
-      Alert.alert('Invalid timeout', 'Enter a timeout between 1000 and 60000 ms.');
-      return;
-    }
-    setCloudBusy(true);
-    try {
-      await saveCloudSettings(collectCloudSettings());
-      Alert.alert('Saved', 'Cloud connection settings were saved.');
-    } catch {
-      Alert.alert('Unable to save', 'Please check the relay URL and try again.');
-    } finally {
-      setCloudBusy(false);
-    }
-  };
-
-  const handleCloudToggle = async () => {
-    if (!relayUrl.trim()) {
-      Alert.alert('Relay server required', 'Enter the relay server URL.');
-      return;
-    }
-    if (!validateCloudTimeout()) {
-      Alert.alert('Invalid timeout', 'Enter a timeout between 1000 and 60000 ms.');
-      return;
-    }
-    setCloudBusy(true);
-    try {
-      if (cloudStatus?.connected) {
-        await disconnectCloud();
-      } else {
-        await connectCloud(collectCloudSettings());
-      }
-    } catch (error) {
-      Alert.alert('Cloud connection', error.message || 'Unable to connect to the relay server.');
-    } finally {
-      setCloudBusy(false);
-    }
-  };
-
-  const formatDate = (value) => {
-    if (!value) return '--';
-    const date = new Date(value);
-    return Number.isNaN(date.getTime())
-      ? '--'
-      : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  };
-
-  const formatDuration = (milliseconds) => {
-    const totalSeconds = Math.floor(Math.max(0, Number(milliseconds) || 0) / 1000);
-    if (totalSeconds <= 0) return '--';
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-  };
-
-  const activeStatusText = modeDraft === 'cloud'
+  const activeStatusText = connectionMode === 'cloud'
     ? (cloudStatus?.state || 'disconnected')
     : connectionStatus;
-  const activeConnected = modeDraft === 'cloud'
+  const activeConnected = connectionMode === 'cloud'
     ? cloudStatus?.connected === true
     : connectionStatus === 'connected';
 
@@ -278,7 +172,7 @@ export default function SettingsScreen({ navigation }) {
               </View>
               <View style={styles.summaryText}>
                 <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
-                <Text style={styles.summaryMeta}>{modeDraft === 'cloud' ? 'Cloud relay' : 'Local network'}</Text>
+                <Text style={styles.summaryMeta}>{connectionMode === 'cloud' ? 'Cloud relay' : 'Local network'}</Text>
               </View>
             </View>
             <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
@@ -286,130 +180,6 @@ export default function SettingsScreen({ navigation }) {
               <Text style={styles.summaryStatusText}>{activeStatusText || 'offline'}</Text>
             </View>
           </GlassPanel>
-
-          <Text style={styles.sectionTitle}>Connection mode</Text>
-          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            <View style={styles.modeRow}>
-              <Pressable
-                accessibilityRole="radio"
-                accessibilityState={{ checked: modeDraft === 'local' }}
-                onPress={() => handleModeChange('local')}
-                style={[styles.modeButton, modeDraft === 'local' && styles.modeButtonActive]}
-              >
-                <Ionicons color={colors.text} name="phone-portrait-outline" size={18} />
-                <Text style={styles.modeButtonText}>Local</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="radio"
-                accessibilityState={{ checked: modeDraft === 'cloud' }}
-                onPress={() => handleModeChange('cloud')}
-                style={[styles.modeButton, modeDraft === 'cloud' && styles.modeButtonActive]}
-              >
-                <Ionicons color={colors.text} name="cloud-outline" size={18} />
-                <Text style={styles.modeButtonText}>Cloud</Text>
-              </Pressable>
-            </View>
-            <Text style={styles.advancedText}>
-              Local connects directly to OpenX Desktop. Cloud connects only to the relay server for this phase.
-            </Text>
-          </GlassPanel>
-
-          {modeDraft === 'cloud' ? (
-            <>
-              <Text style={styles.sectionTitle}>Cloud connection</Text>
-              <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-                <View style={styles.statusRow}>
-                  <Text style={styles.permissionLabel}>Status</Text>
-                  <Text style={styles.statusText}>{cloudStatus?.state || 'disconnected'}</Text>
-                </View>
-                <Text style={styles.label}>Relay server</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  onChangeText={setRelayUrl}
-                  placeholder="wss://openx-server.onrender.com/ws"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="done"
-                  style={styles.input}
-                  value={relayUrl}
-                />
-                <View style={styles.switchList}>
-                  <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: cloudAutoConnect }}
-                    onPress={() => setCloudAutoConnect((value) => !value)}
-                    style={styles.switchRow}
-                  >
-                    <Text style={styles.permissionLabel}>Auto connect</Text>
-                    <View style={[styles.switchTrack, cloudAutoConnect && styles.switchTrackOn]}>
-                      <View style={[styles.switchThumb, cloudAutoConnect && styles.switchThumbOn]} />
-                    </View>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: cloudReconnect }}
-                    onPress={() => setCloudReconnect((value) => !value)}
-                    style={styles.switchRow}
-                  >
-                    <Text style={styles.permissionLabel}>Reconnect</Text>
-                    <View style={[styles.switchTrack, cloudReconnect && styles.switchTrackOn]}>
-                      <View style={[styles.switchThumb, cloudReconnect && styles.switchThumbOn]} />
-                    </View>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: cloudHeartbeat }}
-                    onPress={() => setCloudHeartbeat((value) => !value)}
-                    style={styles.switchRow}
-                  >
-                    <Text style={styles.permissionLabel}>Heartbeat</Text>
-                    <View style={[styles.switchTrack, cloudHeartbeat && styles.switchTrackOn]}>
-                      <View style={[styles.switchThumb, cloudHeartbeat && styles.switchThumbOn]} />
-                    </View>
-                  </Pressable>
-                </View>
-                <Text style={[styles.label, styles.fieldGap]}>Connection timeout</Text>
-                <TextInput
-                  keyboardType="number-pad"
-                  maxLength={5}
-                  onChangeText={(value) => setCloudTimeout(value.replace(/\D/g, ''))}
-                  placeholder="10000"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="done"
-                  style={styles.input}
-                  value={cloudTimeout}
-                />
-                <View style={styles.cloudGrid}>
-                  <Text style={styles.cloudMeta}>Attempts: {cloudStatus?.reconnectAttempts || 0}</Text>
-                  <Text style={styles.cloudMeta}>Duration: {formatDuration(cloudStatus?.connectionDurationMs)}</Text>
-                  <Text style={styles.cloudMeta}>Last: {formatDate(cloudStatus?.lastConnectedAt)}</Text>
-                  <Text style={styles.cloudMeta}>Quality: {cloudStatus?.quality || 'Unavailable'}</Text>
-                </View>
-                <Text style={styles.updatedText}>
-                  {cloudStatus?.friendlyMessage || 'Cloud mode is disconnected.'}
-                </Text>
-                <View style={styles.buttonRow}>
-                  <GlassButton
-                    disabled={cloudBusy}
-                    iconName="save-outline"
-                    label="Save"
-                    loading={cloudBusy}
-                    onPress={handleSaveCloud}
-                    style={styles.buttonFlex}
-                  />
-                  <GlassButton
-                    disabled={cloudBusy}
-                    iconName={cloudStatus?.connected ? 'close-circle-outline' : 'cloud-outline'}
-                    label={cloudStatus?.connected ? 'Disconnect' : 'Connect'}
-                    loading={cloudBusy}
-                    onPress={handleCloudToggle}
-                    style={styles.buttonFlex}
-                  />
-                </View>
-              </GlassPanel>
-            </>
-          ) : null}
 
           <Text style={styles.sectionTitle}>Mobile name</Text>
           <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
@@ -661,100 +431,6 @@ const styles = StyleSheet.create({
   },
   cardContent: {
     padding: spacing.lg,
-  },
-  modeRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.md,
-  },
-  modeButton: {
-    alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    flex: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    justifyContent: 'center',
-    minHeight: 52,
-  },
-  modeButtonActive: {
-    backgroundColor: colors.glassStrong,
-    borderColor: colors.borderBright,
-  },
-  modeButtonText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  statusRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.lg,
-  },
-  statusText: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: '900',
-    textTransform: 'capitalize',
-  },
-  switchList: {
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  switchRow: {
-    alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-  },
-  switchTrack: {
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderRadius: radius.round,
-    height: 26,
-    justifyContent: 'center',
-    padding: 3,
-    width: 48,
-  },
-  switchTrackOn: {
-    backgroundColor: 'rgba(70, 217, 145, 0.32)',
-  },
-  switchThumb: {
-    backgroundColor: colors.textMuted,
-    borderRadius: radius.round,
-    height: 20,
-    width: 20,
-  },
-  switchThumbOn: {
-    alignSelf: 'flex-end',
-    backgroundColor: colors.success,
-  },
-  cloudGrid: {
-    display: 'flex',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  cloudMeta: {
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    color: colors.textSecondary,
-    flexGrow: 1,
-    fontSize: 11,
-    fontWeight: '700',
-    minWidth: '46%',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   permissionList: {
     gap: spacing.md,

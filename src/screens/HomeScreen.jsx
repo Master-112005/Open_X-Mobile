@@ -170,10 +170,22 @@ export default function HomeScreen({ navigation }) {
             </View>
             <View style={styles.rightCluster}>
               <FloatingButton
+                accessibilityLabel="Open calendar"
+                iconName="calendar-outline"
+                label="Calendar"
+                onPress={() => navigation.navigate('Calendar')}
+              />
+              <FloatingButton
                 accessibilityLabel="Open QR scanner"
                 iconName="qr-code-outline"
                 label="QR scanner"
                 onPress={() => navigation.navigate('QRPairing')}
+              />
+              <FloatingButton
+                accessibilityLabel="Open profile"
+                iconName="person-circle-outline"
+                label="Profile"
+                onPress={() => navigation.navigate('Profile')}
               />
               <FloatingButton
                 accessibilityLabel="Open settings"
