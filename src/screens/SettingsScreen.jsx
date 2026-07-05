@@ -64,7 +64,7 @@ export default function SettingsScreen({ navigation }) {
   const [port, setPort] = useState(desktopPort);
   const [phoneName, setPhoneName] = useState(deviceName);
   const [modeDraft, setModeDraft] = useState(connectionMode);
-  const [relayUrl, setRelayUrl] = useState(cloudSettings?.relayUrl || 'ws://localhost:8080/ws');
+  const [relayUrl, setRelayUrl] = useState(cloudSettings?.relayUrl || 'ws://localhost:8081/ws');
   const [cloudAutoConnect, setCloudAutoConnect] = useState(cloudSettings?.autoConnect === true);
   const [cloudReconnect, setCloudReconnect] = useState(cloudSettings?.reconnectEnabled !== false);
   const [cloudHeartbeat, setCloudHeartbeat] = useState(cloudSettings?.heartbeatEnabled !== false);
@@ -91,7 +91,7 @@ export default function SettingsScreen({ navigation }) {
   }, [connectionMode]);
 
   useEffect(() => {
-    setRelayUrl(cloudSettings?.relayUrl || 'ws://localhost:8080/ws');
+    setRelayUrl(cloudSettings?.relayUrl || 'ws://localhost:8081/ws');
     setCloudAutoConnect(cloudSettings?.autoConnect === true);
     setCloudReconnect(cloudSettings?.reconnectEnabled !== false);
     setCloudHeartbeat(cloudSettings?.heartbeatEnabled !== false);

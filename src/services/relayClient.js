@@ -7,16 +7,21 @@ const CONNECTION_STATES = new Set([
   'error',
 ]);
 
-const DEFAULT_RELAY_URL = 'ws://localhost:8080/ws';
+const DEFAULT_RELAY_URL = 'ws://localhost:8081/ws';
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60 * 1000;
-const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000];
+const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 30000];
 
 const clampNumber = (value, min, max, fallback) => {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, Math.round(number)));
+};
+
+const withReconnectJitter = (delayMs) => {
+  const jitter = delayMs * 0.2 * (Math.random() * 2 - 1);
+  return Math.max(250, Math.round(delayMs + jitter));
 };
 
 export const normalizeRelayUrl = (value, fallback = DEFAULT_RELAY_URL) => {
@@ -76,6 +81,15 @@ class RelayClient {
   owner = null;
   presence = [];
   notifications = [];
+  auth = null;
+  reliability = {
+    state: 'offline',
+    reconnectCount: 0,
+    droppedConnections: 0,
+    sessionRestoreCount: 0,
+    retryCount: 0,
+    lastRecoveryAt: null,
+  };
   deviceIdentity = {
     deviceId: '',
     deviceName: 'OpenX Mobile',
@@ -197,6 +211,7 @@ class RelayClient {
         this.owner = null;
         this.presence = [];
         this.notifications = [];
+        this.auth = null;
         this.rejectPendingPairing(new Error('Cloud connection closed.'));
         if (this.manuallyDisconnected || this.status === 'disconnecting') {
           this.friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
@@ -205,6 +220,8 @@ class RelayClient {
           return;
         }
         this.friendlyMessage = 'Connection dropped. Reconnecting safely...';
+        this.reliability.droppedConnections += 1;
+        this.reliability.lastRecoveryAt = Date.now();
         this.setStatus(this.settings.reconnectEnabled ? 'reconnecting' : 'error');
         this.scheduleReconnect();
         settleFailure(new Error(this.friendlyMessage));
@@ -235,6 +252,7 @@ class RelayClient {
     this.owner = null;
     this.presence = [];
     this.notifications = [];
+    this.auth = null;
     this.setStatus('disconnected');
     return Promise.resolve(this.getStatus({ reason }));
   }
@@ -283,6 +301,8 @@ class RelayClient {
       owner: this.owner,
       presence: [...this.presence],
       notifications: [...this.notifications],
+      reliability: this.getReliabilityStatus(),
+      authenticated: Boolean(this.auth?.accessToken),
       friendlyMessage: this.friendlyMessage,
       settings: { ...this.settings },
       ...extra,
@@ -292,7 +312,7 @@ class RelayClient {
   send(payload) {
     if (!this.isConnected()) return false;
     try {
-      this.socket.send(JSON.stringify(payload || {}));
+      this.socket.send(JSON.stringify(this.withAuth(payload || {})));
       return true;
     } catch {
       this.setStatus('error');
@@ -304,10 +324,15 @@ class RelayClient {
   }
 
   sendRelayPacket(packet) {
-    return this.send({
+    const sent = this.send({
       type: 'relay:packet',
       packet,
     });
+    if (!sent && packet?.metadata?.retryable === true) {
+      this.reliability.retryCount += 1;
+      this.emitStatus();
+    }
+    return sent;
   }
 
   updatePresence(state, metadata = {}) {
@@ -435,7 +460,8 @@ class RelayClient {
   }
 
   authenticate() {
-    return Promise.resolve({ authenticated: false, reason: 'not-implemented' });
+    if (this.auth?.accessToken) return Promise.resolve({ authenticated: true });
+    return Promise.resolve({ authenticated: false, reason: 'not-connected' });
   }
 
   setAuthProvider() {
@@ -477,6 +503,9 @@ class RelayClient {
       if (message.type === 'device:registered') {
         this.device = message.device || null;
         this.owner = message.owner || null;
+        this.auth = message.auth || this.auth;
+        this.reliability.state = 'healthy';
+        this.reliability.sessionRestoreCount += 1;
         this.subscribePresence();
         this.requestNotificationList();
         this.emitStatus();
@@ -488,6 +517,7 @@ class RelayClient {
         return;
       }
       if (message.type === 'cloud-pair:paired') {
+        this.auth = message.auth || this.auth;
         this.resolvePendingPairing({
           paired: true,
           message: message.message || 'Paired Successfully',
@@ -515,7 +545,17 @@ class RelayClient {
         message.type === 'relay:ack' ||
         message.type === 'relay:error'
       ) {
+        if (message.type === 'relay:ack') this.reliability.state = 'healthy';
         this.emitRelayMessage(message);
+        return;
+      }
+      if (message.type === 'auth:refreshed') {
+        this.auth = message.auth || this.auth;
+        this.emitStatus();
+        return;
+      }
+      if (message.type === 'auth:error') {
+        if (message.code === 'expired-token') this.refreshAuth();
         return;
       }
       if (message.type === 'presence:update') {
@@ -655,9 +695,12 @@ class RelayClient {
       return;
     }
     this.reconnectAttempts += 1;
-    const delay = RECONNECT_DELAYS_MS[
+    const baseDelay = RECONNECT_DELAYS_MS[
       Math.min(this.reconnectAttempts - 1, RECONNECT_DELAYS_MS.length - 1)
     ];
+    const delay = withReconnectJitter(baseDelay);
+    this.reliability.state = 'reconnecting';
+    this.reliability.reconnectCount += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.reconnect().catch(() => {
@@ -712,6 +755,31 @@ class RelayClient {
     if (!this.connectTimeout) return;
     clearTimeout(this.connectTimeout);
     this.connectTimeout = null;
+  }
+
+  withAuth(payload) {
+    const type = String(payload?.type || '');
+    if (!this.auth?.accessToken || type === 'device:register' || type.startsWith('auth:')) {
+      return payload;
+    }
+    return { ...payload, accessToken: this.auth.accessToken };
+  }
+
+  refreshAuth() {
+    if (!this.auth?.refreshToken) return false;
+    return this.send({
+      type: 'auth:refresh',
+      requestId: `mobile-auth-refresh-${Date.now()}`,
+      refreshToken: this.auth.refreshToken,
+    });
+  }
+
+  getReliabilityStatus() {
+    return {
+      ...this.reliability,
+      reconnectAttempts: this.reconnectAttempts,
+      retryQueueSize: 0,
+    };
   }
 }
 
