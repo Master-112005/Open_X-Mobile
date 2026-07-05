@@ -25,6 +25,7 @@
         }
       ],
       "expo-font",
+      "expo-notifications",
       "expo-sharing"
     ],
     "android": {
@@ -36,7 +37,8 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "extra": {

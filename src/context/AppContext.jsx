@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
+import * as Notifications from 'expo-notifications';
 import {
   createTransferRecord,
   loadTransferHistory,
@@ -57,6 +58,17 @@ const DEFAULT_CONNECTION_MODE = 'local';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
+const MAX_PENDING_MOBILE_NOTIFICATIONS = 20;
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const parseStoredObject = (value) => {
   if (!value) return {};
@@ -176,6 +188,9 @@ export function AppProvider({ children }) {
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
   const scheduleItemsRef = useRef([]);
+  const scheduleNotificationIdsRef = useRef(new Map());
+  const pendingMobileNotificationsRef = useRef([]);
+  const notificationPermissionRef = useRef(null);
   const sessionRef = useRef(EMPTY_SESSION);
   const settingsRef = useRef(normalizeConnectionSettings({}));
 
@@ -331,6 +346,95 @@ export function AppProvider({ children }) {
     });
   }, []);
 
+  const ensureNotificationPermission = useCallback(async () => {
+    if (notificationPermissionRef.current === true) return true;
+    if (notificationPermissionRef.current === false) return false;
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('openx-schedules', {
+          name: 'OpenX reminders',
+          importance: Notifications.AndroidImportance.HIGH,
+          vibrationPattern: [0, 250, 180, 250],
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        });
+      }
+      const current = await Notifications.getPermissionsAsync();
+      const requested = current.granted ? current : await Notifications.requestPermissionsAsync();
+      notificationPermissionRef.current = requested.granted === true;
+      return notificationPermissionRef.current;
+    } catch {
+      notificationPermissionRef.current = false;
+      return false;
+    }
+  }, []);
+
+  const cancelLocalScheduleNotification = useCallback(async (scheduleId) => {
+    const id = String(scheduleId || '').trim();
+    if (!id) return false;
+    const record = scheduleNotificationIdsRef.current.get(id);
+    if (!record?.notificationId) return false;
+    scheduleNotificationIdsRef.current.delete(id);
+    try {
+      await Notifications.cancelScheduledNotificationAsync(record.notificationId);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const presentScheduleDueNotification = useCallback(async (schedule) => {
+    const item = normalizeScheduleItem(schedule);
+    if (!item || !(await ensureNotificationPermission())) return false;
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `${item.kind || 'Reminder'} due`,
+          body: item.message || item.title,
+          data: { scheduleId: item.id, kind: item.kind || 'Reminder', source: 'openx' },
+          sound: true,
+        },
+        trigger: null,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [ensureNotificationPermission]);
+
+  const scheduleLocalScheduleNotification = useCallback(async (schedule) => {
+    const item = normalizeScheduleItem(schedule);
+    if (!item || String(item.status || '').toLowerCase() !== 'scheduled') return false;
+    const dueAt = new Date(item.dueAt);
+    if (!Number.isFinite(dueAt.getTime()) || dueAt.getTime() <= Date.now()) return false;
+    const current = scheduleNotificationIdsRef.current.get(item.id);
+    if (current?.dueAt === item.dueAt && current?.status === item.status) return true;
+    if (current?.notificationId) await cancelLocalScheduleNotification(item.id);
+    if (!(await ensureNotificationPermission())) return false;
+    try {
+      const notificationId = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `${item.kind || 'Reminder'} due`,
+          body: item.message || item.title,
+          data: { scheduleId: item.id, kind: item.kind || 'Reminder', source: 'openx' },
+          sound: true,
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: dueAt,
+          channelId: Platform.OS === 'android' ? 'openx-schedules' : undefined,
+        },
+      });
+      scheduleNotificationIdsRef.current.set(item.id, {
+        notificationId,
+        dueAt: item.dueAt,
+        status: item.status,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [cancelLocalScheduleNotification, ensureNotificationPermission]);
+
   const requestScheduleSync = useCallback(() => {
     if (settingsRef.current.connectionMode === 'cloud') {
       return sendCloudScheduleSync('request');
@@ -364,6 +468,20 @@ export function AppProvider({ children }) {
       }),
     ]);
   }, []);
+
+  const reconnectActiveConnection = useCallback(() => {
+    if (settingsRef.current.connectionMode === 'cloud') {
+      const cloud = settingsRef.current.cloud || {};
+      return relayClient.reconnect().catch(() => relayClient.connect(cloud));
+    }
+
+    const address = String(settingsRef.current.serverIp || desktopAddress || '').trim();
+    const port = String(settingsRef.current.serverPort || desktopPort || DEFAULT_PORT).trim();
+    if (!address || !port) {
+      return Promise.reject(new Error('Desktop connection is not configured.'));
+    }
+    return websocketService.reconnect().catch(() => websocketService.connect(address, port));
+  }, [desktopAddress, desktopPort]);
 
   useEffect(() => {
     let mounted = true;
@@ -931,6 +1049,32 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     if (!schedulesLoaded) return undefined;
+    let cancelled = false;
+    const syncNotifications = async () => {
+      const activeIds = new Set();
+      for (const item of scheduleItemsRef.current) {
+        const normalized = normalizeScheduleItem(item);
+        if (!normalized) continue;
+        const dueMs = new Date(normalized.dueAt).getTime();
+        if (String(normalized.status || '').toLowerCase() === 'scheduled' && Number.isFinite(dueMs) && dueMs > Date.now()) {
+          activeIds.add(normalized.id);
+          if (!cancelled) await scheduleLocalScheduleNotification(normalized);
+        }
+      }
+      for (const id of scheduleNotificationIdsRef.current.keys()) {
+        if (!activeIds.has(id) && !cancelled) await cancelLocalScheduleNotification(id);
+      }
+    };
+    syncNotifications().catch(() => {
+      console.warn('Unable to synchronize OpenX mobile notifications.');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cancelLocalScheduleNotification, scheduleItems, scheduleLocalScheduleNotification, schedulesLoaded]);
+
+  useEffect(() => {
+    if (!schedulesLoaded) return undefined;
     const now = Date.now();
     const scheduled = scheduleItemsRef.current
       .filter((item) => String(item.status || '').toLowerCase() === 'scheduled')
@@ -957,17 +1101,15 @@ export function AppProvider({ children }) {
       persistSchedules(updated).catch(() => {
         console.warn('Unable to persist due OpenX schedules.');
       });
-      setMessages((current) => [
-        ...current,
-        ...dueNow.slice(0, 3).map((item) => createMessage(
-          'assistant',
-          `${item.kind || 'Reminder'} due: ${item.message || item.title}`,
-        )),
-      ]);
+      dueNow.slice(0, 3).forEach((item) => {
+        const hadScheduledNotification = scheduleNotificationIdsRef.current.has(item.id);
+        cancelLocalScheduleNotification(item.id);
+        if (!hadScheduledNotification) presentScheduleDueNotification(item);
+      });
     }, Math.max(0, Math.min(next.dueMs - now, 2147483647)));
 
     return () => clearTimeout(timer);
-  }, [scheduleItems, schedulesLoaded]);
+  }, [cancelLocalScheduleNotification, presentScheduleDueNotification, scheduleItems, schedulesLoaded]);
 
   const sendMessage = useCallback(
     (text) => {
@@ -1014,6 +1156,7 @@ export function AppProvider({ children }) {
             deviceName: pairingDataRef.current.deviceName,
             metadata: {
               client: 'openx-mobile',
+              requestedAction: /^(?:open|launch|start|run|play|watch)\b/i.test(normalizedText) ? 'open' : undefined,
             },
           },
         };
@@ -1025,6 +1168,7 @@ export function AppProvider({ children }) {
             ...current,
             createMessage('assistant', 'Cloud command timed out. Please try again.'),
           ]);
+          reconnectActiveConnection().catch(() => {});
         }, CLOUD_COMMAND_TIMEOUT_MS);
         pendingCloudRequestsRef.current.set(requestId, { packetId, timer });
         const sent = relayClient.sendRelayPacket(packet);
@@ -1035,7 +1179,10 @@ export function AppProvider({ children }) {
             ? [createMessage('assistant', CONNECTION_ERROR_MESSAGE)]
             : []),
         ]);
-        if (!sent) clearCloudRequest(requestId);
+        if (!sent) {
+          clearCloudRequest(requestId);
+          reconnectActiveConnection().catch(() => {});
+        }
         return true;
       }
       if (
@@ -1069,10 +1216,11 @@ export function AppProvider({ children }) {
           ? [createMessage('assistant', CONNECTION_ERROR_MESSAGE)]
           : []),
       ]);
+      if (!payload) reconnectActiveConnection().catch(() => {});
 
       return true;
     },
-    [clearCloudRequest, paired],
+    [clearCloudRequest, paired, reconnectActiveConnection],
   );
 
   const saveSettings = useCallback(async (address, port) => {
@@ -1301,10 +1449,50 @@ export function AppProvider({ children }) {
     return normalized;
   }, [sendCloudScheduleSync]);
 
-  const sendMobileNotification = useCallback((notification) => {
-    const normalized = normalizeMobileNotification(notification);
-    if (!normalized || !pairingDataRef.current.paired) return false;
+  const removeScheduleItem = useCallback(async (scheduleId) => {
+    const id = String(scheduleId || '').trim();
+    if (!id) return false;
+    const existing = scheduleItemsRef.current.find((item) => item.id === id || item.taskName === id);
+    if (!existing) return false;
+    const completed = normalizeScheduleItem({
+      ...existing,
+      status: 'completed',
+      updatedAt: new Date().toISOString(),
+      sourceDeviceId: pairingDataRef.current.deviceId,
+      sourceDeviceName: pairingDataRef.current.deviceName,
+    });
+    if (!completed) return false;
 
+    const merged = mergeScheduleItems(scheduleItemsRef.current, [completed]);
+    scheduleItemsRef.current = merged;
+    setScheduleItems(merged);
+    await persistSchedules(merged);
+    await cancelLocalScheduleNotification(completed.id);
+
+    if (settingsRef.current.connectionMode === 'cloud') {
+      sendCloudScheduleSync('upsert', completed);
+      return true;
+    }
+
+    if (
+      websocketService.getStatus() === 'connected' &&
+      pairingDataRef.current.paired &&
+      isSessionValid(sessionRef.current)
+    ) {
+      websocketService.sendScheduleUpsert({
+        requestId: Crypto.randomUUID(),
+        timestamp: Date.now(),
+        deviceId: pairingDataRef.current.deviceId,
+        deviceName: pairingDataRef.current.deviceName,
+        sessionToken: sessionRef.current.sessionToken,
+        schedule: completed,
+      });
+    }
+    return true;
+  }, [cancelLocalScheduleNotification, sendCloudScheduleSync]);
+
+  const forwardMobileNotificationNow = useCallback((normalized) => {
+    if (!normalized || !pairingDataRef.current.paired) return false;
     if (settingsRef.current.connectionMode === 'cloud') {
       const cloudPairing = pairingDataRef.current.cloudPairing || {};
       if (!relayClient.isConnected() || !cloudPairing.desktopDeviceId) return false;
@@ -1335,6 +1523,62 @@ export function AppProvider({ children }) {
       notification: normalized,
     });
   }, []);
+
+  const flushPendingMobileNotifications = useCallback(() => {
+    const pending = pendingMobileNotificationsRef.current;
+    if (pending.length === 0) return 0;
+    const remaining = [];
+    let sent = 0;
+    for (const notification of pending) {
+      if (forwardMobileNotificationNow(notification)) {
+        sent += 1;
+      } else {
+        remaining.push(notification);
+      }
+    }
+    pendingMobileNotificationsRef.current = remaining.slice(-MAX_PENDING_MOBILE_NOTIFICATIONS);
+    return sent;
+  }, [forwardMobileNotificationNow]);
+
+  const sendMobileNotification = useCallback((notification) => {
+    const normalized = normalizeMobileNotification(notification);
+    if (!normalized || !pairingDataRef.current.paired) return false;
+    if (forwardMobileNotificationNow(normalized)) return true;
+
+    pendingMobileNotificationsRef.current = [
+      ...pendingMobileNotificationsRef.current.filter((item) => item.notificationId !== normalized.notificationId),
+      normalized,
+    ].slice(-MAX_PENDING_MOBILE_NOTIFICATIONS);
+    reconnectActiveConnection().catch(() => {});
+    return false;
+  }, [forwardMobileNotificationNow, reconnectActiveConnection]);
+
+  useEffect(() => {
+    const isReady = settingsRef.current.connectionMode === 'cloud'
+      ? cloudStatus?.connected === true
+      : connectionStatus === 'connected';
+    if (isReady) flushPendingMobileNotifications();
+  }, [cloudStatus?.connected, connectionStatus, connectionMode, flushPendingMobileNotifications]);
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationReceivedListener((event) => {
+      const request = event?.request || {};
+      const content = request.content || {};
+      sendMobileNotification({
+        notificationId: request.identifier,
+        appName: String(content.data?.appName || 'OpenX Mobile'),
+        packageName: 'com.openx.mobile',
+        title: content.title || 'OpenX Mobile',
+        message: content.body || '',
+        category: String(content.data?.kind || content.data?.category || 'phone'),
+        priority: 'high',
+        timestamp: Date.now(),
+      });
+    });
+    return () => {
+      if (typeof subscription?.remove === 'function') subscription.remove();
+    };
+  }, [sendMobileNotification]);
 
   const sendFile = useCallback(
     async (file) => {
@@ -1489,6 +1733,7 @@ export function AppProvider({ children }) {
       pairCloudDevice,
       updateDeviceName,
       upsertScheduleItem,
+      removeScheduleItem,
       requestScheduleSync,
       sendMobileNotification,
       sendFile,
@@ -1500,6 +1745,7 @@ export function AppProvider({ children }) {
       saveCloudSettings,
       connectCloud,
       disconnectCloud,
+      reconnectActiveConnection,
     }),
     [
       messages,
@@ -1535,6 +1781,7 @@ export function AppProvider({ children }) {
       pairCloudDevice,
       updateDeviceName,
       upsertScheduleItem,
+      removeScheduleItem,
       requestScheduleSync,
       sendMobileNotification,
       sendFile,
@@ -1546,6 +1793,7 @@ export function AppProvider({ children }) {
       saveCloudSettings,
       connectCloud,
       disconnectCloud,
+      reconnectActiveConnection,
     ],
   );
 

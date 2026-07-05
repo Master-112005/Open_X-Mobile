@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -35,12 +37,47 @@ function FloatingButton({ iconName, label, onPress, accessibilityLabel }) {
   );
 }
 
-function ConnectionDot({ status }) {
+function ConnectionDot({ status, onReconnect }) {
   const online = status === 'connected';
+  const busy = status === 'connecting' || status === 'reconnecting';
+  const spin = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!busy) {
+      spin.stopAnimation();
+      spin.setValue(0);
+      return undefined;
+    }
+    const animation = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 850,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [busy, spin]);
+  const rotate = spin.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+  const canReconnect = !online && !busy;
   return (
-    <View style={styles.connectionPill}>
+    <Pressable
+      accessibilityHint={canReconnect ? 'Attempts to reconnect OpenX Mobile.' : undefined}
+      accessibilityLabel={online ? 'OpenX connected' : busy ? 'OpenX reconnecting' : 'Reconnect OpenX'}
+      accessibilityRole="button"
+      disabled={!canReconnect}
+      hitSlop={8}
+      onPress={onReconnect}
+      style={({ pressed }) => [styles.connectionPill, pressed && styles.floatPressed]}
+    >
+      {busy ? (
+        <Animated.View style={[styles.connectionSpinner, { transform: [{ rotate }] }]} />
+      ) : null}
       <View style={[styles.connectionDot, online ? styles.online : styles.offline]} />
-    </View>
+    </Pressable>
   );
 }
 
@@ -58,6 +95,7 @@ export default function HomeScreen({ navigation }) {
     sessionValid,
     sendMessage,
     sendFile,
+    reconnectActiveConnection,
   } = useApp();
   const [text, setText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -150,6 +188,12 @@ export default function HomeScreen({ navigation }) {
     }
   }, [commandRestriction, scrollToNewest, sendMessage]);
 
+  const handleReconnect = useCallback(() => {
+    reconnectActiveConnection?.().catch((error) => {
+      Alert.alert('Reconnect failed', error.message || 'Unable to reconnect OpenX.');
+    });
+  }, [reconnectActiveConnection]);
+
   return (
     <View style={styles.screen}>
       <KeyboardAvoidingView
@@ -166,7 +210,7 @@ export default function HomeScreen({ navigation }) {
                 label="Files"
                 onPress={() => navigation.navigate('Transfers')}
               />
-              <ConnectionDot status={activeConnectionStatus} />
+              <ConnectionDot status={activeConnectionStatus} onReconnect={handleReconnect} />
             </View>
             <View style={styles.rightCluster}>
               <FloatingButton
@@ -345,6 +389,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 22,
     justifyContent: 'center',
+    width: 22,
+  },
+  connectionSpinner: {
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: radius.round,
+    borderRightColor: colors.text,
+    borderTopColor: colors.text,
+    borderWidth: 2,
+    height: 22,
+    position: 'absolute',
     width: 22,
   },
   connectionDot: {

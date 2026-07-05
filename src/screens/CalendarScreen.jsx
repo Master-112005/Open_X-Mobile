@@ -69,6 +69,7 @@ export default function CalendarScreen({ navigation }) {
     schedulesLoaded,
     requestScheduleSync,
     upsertScheduleItem,
+    removeScheduleItem,
   } = useApp();
   const insets = useSafeAreaInsets();
   const [kind, setKind] = useState('Reminder');
@@ -125,6 +126,25 @@ export default function CalendarScreen({ navigation }) {
     } finally {
       setSaving(false);
     }
+  };
+
+  const confirmRemove = (item) => {
+    Alert.alert(
+      'Remove reminder',
+      `Remove "${item.message || item.title}" from your calendar?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            removeScheduleItem(item.id).catch((error) => {
+              Alert.alert('Unable to remove', error.message);
+            });
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -208,6 +228,14 @@ export default function CalendarScreen({ navigation }) {
                   <Text style={styles.scheduleMeta}>{formatTime(item.dueAt)} · {item.kind}</Text>
                 </View>
                 <View style={[styles.statusDot, item.status === 'due' ? styles.dueDot : styles.scheduledDot]} />
+                <Pressable
+                  accessibilityLabel={`Remove ${item.message || item.title}`}
+                  accessibilityRole="button"
+                  onPress={() => confirmRemove(item)}
+                  style={({ pressed }) => [styles.deleteButton, pressed && styles.pressed]}
+                >
+                  <Ionicons color={colors.danger} name="trash-outline" size={18} />
+                </Pressable>
               </LinearGradient>
             )
           )}
@@ -363,6 +391,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.round,
     height: 10,
     width: 10,
+  },
+  deleteButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
   },
   scheduledDot: { backgroundColor: colors.success },
   dueDot: { backgroundColor: colors.warning },
