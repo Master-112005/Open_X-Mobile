@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
 import { useApp } from '../context/AppContext';
+import { normalizeRelayUrl } from '../services/relayClient';
 import { colors, radius, spacing } from '../styles/theme';
 
 const PERMISSION_ITEMS = [
@@ -24,7 +25,6 @@ const PERMISSION_ITEMS = [
   { key: 'fileTransfer', label: 'File transfer' },
   { key: 'receiveFiles', label: 'Receive files' },
   { key: 'sendFiles', label: 'Send files' },
-  { key: 'powerActions', label: 'Power actions' },
 ];
 
 function HeaderButton({ accessibilityLabel, iconName, onPress }) {
@@ -44,6 +44,7 @@ export default function SettingsScreen({ navigation }) {
   const {
     desktopAddress,
     desktopPort,
+    connectionStatus,
     connectionMode,
     cloudStatus,
     cloudSettings,
@@ -64,7 +65,7 @@ export default function SettingsScreen({ navigation }) {
   const [port, setPort] = useState(desktopPort);
   const [phoneName, setPhoneName] = useState(deviceName);
   const [modeDraft, setModeDraft] = useState(connectionMode);
-  const [relayUrl, setRelayUrl] = useState(cloudSettings?.relayUrl || 'ws://localhost:8081/ws');
+  const [relayUrl, setRelayUrl] = useState(normalizeRelayUrl(cloudSettings?.relayUrl));
   const [cloudAutoConnect, setCloudAutoConnect] = useState(cloudSettings?.autoConnect === true);
   const [cloudReconnect, setCloudReconnect] = useState(cloudSettings?.reconnectEnabled !== false);
   const [cloudHeartbeat, setCloudHeartbeat] = useState(cloudSettings?.heartbeatEnabled !== false);
@@ -91,7 +92,7 @@ export default function SettingsScreen({ navigation }) {
   }, [connectionMode]);
 
   useEffect(() => {
-    setRelayUrl(cloudSettings?.relayUrl || 'ws://localhost:8081/ws');
+    setRelayUrl(normalizeRelayUrl(cloudSettings?.relayUrl));
     setCloudAutoConnect(cloudSettings?.autoConnect === true);
     setCloudReconnect(cloudSettings?.reconnectEnabled !== false);
     setCloudHeartbeat(cloudSettings?.heartbeatEnabled !== false);
@@ -104,7 +105,7 @@ export default function SettingsScreen({ navigation }) {
     Number(cloudTimeout) <= 60000;
 
   const collectCloudSettings = () => ({
-    relayUrl,
+    relayUrl: normalizeRelayUrl(relayUrl),
     autoConnect: cloudAutoConnect,
     reconnectEnabled: cloudReconnect,
     heartbeatEnabled: cloudHeartbeat,
@@ -234,6 +235,13 @@ export default function SettingsScreen({ navigation }) {
     return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
   };
 
+  const activeStatusText = modeDraft === 'cloud'
+    ? (cloudStatus?.state || 'disconnected')
+    : connectionStatus;
+  const activeConnected = modeDraft === 'cloud'
+    ? cloudStatus?.connected === true
+    : connectionStatus === 'connected';
+
   return (
     <View style={styles.screen}>
       <KeyboardAvoidingView
@@ -258,7 +266,26 @@ export default function SettingsScreen({ navigation }) {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.title}>Settings</Text>
+          <View style={styles.titleBlock}>
+            <Text style={styles.title}>Settings</Text>
+            <Text style={styles.subtitle}>Manage this phone, pairing, and connection behavior.</Text>
+          </View>
+
+          <GlassPanel style={styles.summaryCard} contentStyle={styles.summaryContent}>
+            <View style={styles.summaryMain}>
+              <View style={styles.summaryIcon}>
+                <Ionicons color={colors.text} name="phone-portrait-outline" size={22} />
+              </View>
+              <View style={styles.summaryText}>
+                <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
+                <Text style={styles.summaryMeta}>{modeDraft === 'cloud' ? 'Cloud relay' : 'Local network'}</Text>
+              </View>
+            </View>
+            <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
+              <View style={[styles.summaryDot, activeConnected ? styles.summaryDotOn : styles.summaryDotOff]} />
+              <Text style={styles.summaryStatusText}>{activeStatusText || 'offline'}</Text>
+            </View>
+          </GlassPanel>
 
           <Text style={styles.sectionTitle}>Connection mode</Text>
           <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
@@ -301,7 +328,7 @@ export default function SettingsScreen({ navigation }) {
                   autoCorrect={false}
                   keyboardType="url"
                   onChangeText={setRelayUrl}
-                  placeholder="wss://relay.openx.app/ws"
+                  placeholder="wss://openx-server.onrender.com/ws"
                   placeholderTextColor={colors.textMuted}
                   returnKeyType="done"
                   style={styles.input}
@@ -529,11 +556,98 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: spacing.lg,
   },
+  titleBlock: {
+    marginBottom: spacing.lg,
+  },
   title: {
     color: colors.text,
     fontSize: 30,
     fontWeight: '900',
-    marginBottom: spacing.xl,
+    marginBottom: spacing.xs,
+  },
+  subtitle: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  summaryCard: {
+    borderRadius: radius.lg,
+    marginBottom: spacing.md,
+  },
+  summaryContent: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: spacing.lg,
+  },
+  summaryMain: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.md,
+    minWidth: 0,
+  },
+  summaryIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  summaryText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryName: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  summaryMeta: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  summaryStatus: {
+    alignItems: 'center',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    maxWidth: 126,
+    minHeight: 34,
+    paddingHorizontal: spacing.sm,
+  },
+  summaryStatusOn: {
+    backgroundColor: 'rgba(70, 217, 145, 0.12)',
+    borderColor: 'rgba(70, 217, 145, 0.34)',
+  },
+  summaryStatusOff: {
+    backgroundColor: 'rgba(255, 83, 83, 0.10)',
+    borderColor: 'rgba(255, 83, 83, 0.30)',
+  },
+  summaryDot: {
+    borderRadius: radius.round,
+    height: 8,
+    width: 8,
+  },
+  summaryDotOn: {
+    backgroundColor: colors.success,
+  },
+  summaryDotOff: {
+    backgroundColor: colors.danger,
+  },
+  summaryStatusText: {
+    color: colors.text,
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'capitalize',
   },
   sectionTitle: {
     color: colors.text,

@@ -1,3 +1,5 @@
+import { normalizeRelayUrl } from './relayClient';
+
 const INVALID_QR_MESSAGE = 'Invalid pairing QR code.';
 const EXPIRED_QR_MESSAGE = 'This pairing QR code has expired.';
 const CLOUD_PAIR_VERSION = 1;
@@ -51,7 +53,7 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
     }
     return {
       mode: 'cloud',
-      relayUrl,
+      relayUrl: normalizeRelayUrl(relayUrl),
       pairToken: cloudPairToken,
       expiresAt,
       version: CLOUD_PAIR_VERSION,

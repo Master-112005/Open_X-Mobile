@@ -1,3 +1,5 @@
+import appConfig from '../../app.json';
+
 const CONNECTION_STATES = new Set([
   'disconnected',
   'connecting',
@@ -7,11 +9,13 @@ const CONNECTION_STATES = new Set([
   'error',
 ]);
 
-const DEFAULT_RELAY_URL = 'ws://localhost:8081/ws';
+const DEFAULT_RELAY_URL = 'wss://openx-server.onrender.com/ws';
+const LEGACY_DEFAULT_RELAY_URLS = new Set(['ws://localhost:8081/ws']);
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 30000];
+export const MOBILE_APP_VERSION = String(appConfig?.expo?.version || '1.0.0');
 
 const clampNumber = (value, min, max, fallback) => {
   const number = Number(value);
@@ -40,7 +44,8 @@ export const normalizeRelayUrl = (value, fallback = DEFAULT_RELAY_URL) => {
   const path = String(match[3] || '').trim() || '/ws';
   const query = String(match[4] || '').trim();
   if (!protocol || !host || /[\s]/.test(host)) return fallback;
-  return `${protocol}://${host}${path.startsWith('/') ? path : `/${path}`}${query ? `?${query}` : ''}`;
+  const normalized = `${protocol}://${host}${path.startsWith('/') ? path : `/${path}`}${query ? `?${query}` : ''}`;
+  return LEGACY_DEFAULT_RELAY_URLS.has(normalized) ? DEFAULT_RELAY_URL : normalized;
 };
 
 export const normalizeCloudSettings = (settings = {}) => ({
@@ -95,6 +100,7 @@ class RelayClient {
     deviceName: 'OpenX Mobile',
     deviceType: 'phone',
     platform: 'mobile',
+    softwareVersion: MOBILE_APP_VERSION,
   };
   friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
   statusListeners = new Set();
@@ -404,6 +410,7 @@ class RelayClient {
       deviceName: String(identity.deviceName || this.deviceIdentity.deviceName || 'OpenX Mobile').trim(),
       deviceType: String(identity.deviceType || this.deviceIdentity.deviceType || 'phone').trim(),
       platform: String(identity.platform || this.deviceIdentity.platform || 'mobile').trim(),
+      softwareVersion: String(identity.softwareVersion || identity.version || this.deviceIdentity.softwareVersion || MOBILE_APP_VERSION).trim(),
     };
     if (this.isConnected()) this.registerDevice();
   }
@@ -417,6 +424,8 @@ class RelayClient {
       deviceType: this.deviceIdentity.deviceType,
       friendlyName: this.deviceIdentity.deviceName,
       platform: this.deviceIdentity.platform,
+      softwareVersion: this.deviceIdentity.softwareVersion,
+      version: this.deviceIdentity.softwareVersion,
       capabilities: {
         cloudPairing: true,
         localFirst: true,
@@ -424,7 +433,7 @@ class RelayClient {
     });
   }
 
-  pairWithToken({ relayUrl, pairToken, deviceName, deviceType = 'mobile', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
+  pairWithToken({ relayUrl, pairToken, deviceName, deviceType = 'phone', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
     const token = String(pairToken || '').trim();
     if (!token) {
       return Promise.reject(new Error('Invalid cloud pairing QR code.'));
@@ -444,6 +453,8 @@ class RelayClient {
         deviceName: String(deviceName || 'OpenX Mobile').trim() || 'OpenX Mobile',
         deviceType,
         platform: this.deviceIdentity.platform,
+        softwareVersion: this.deviceIdentity.softwareVersion,
+        version: this.deviceIdentity.softwareVersion,
         capabilities: {
           cloudPairing: true,
           localFirst: true,

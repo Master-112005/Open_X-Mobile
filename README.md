@@ -152,7 +152,7 @@ Cloud QR payloads contain only:
 ```json
 {
   "version": 1,
-  "relayUrl": "ws://localhost:8081/ws",
+  "relayUrl": "wss://openx-server.onrender.com/ws",
   "pairToken": "relay-generated-token",
   "expiresAt": 1767225600000
 }

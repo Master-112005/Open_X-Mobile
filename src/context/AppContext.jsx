@@ -31,11 +31,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Alert, AppState } from 'react-native';
+import { Alert, AppState, Platform } from 'react-native';
 
 import { websocketService } from '../services/websocket';
 import {
+  MOBILE_APP_VERSION,
   normalizeCloudSettings,
+  normalizeRelayUrl,
   relayClient,
 } from '../services/relayClient';
 import { CloudFileTransferManager } from '../services/cloudFileTransfer';
@@ -155,7 +157,8 @@ export function AppProvider({ children }) {
       deviceId: data.deviceId,
       deviceName: data.deviceName,
       deviceType: 'phone',
-      platform: 'mobile',
+      platform: Platform.OS || 'mobile',
+      softwareVersion: MOBILE_APP_VERSION,
     });
     setDeviceId(data.deviceId);
     setDeviceName(data.deviceName);
@@ -662,6 +665,7 @@ export function AppProvider({ children }) {
         const parsedSettings = normalizeConnectionSettings(
           parseStoredObject(savedSettings),
         );
+        const storedSettings = parseStoredObject(savedSettings);
         const parsedPairing = parseStoredObject(savedPairing);
         const savedAddress = parsedSettings.serverIp;
         const savedPort = parsedSettings.serverPort;
@@ -687,6 +691,9 @@ export function AppProvider({ children }) {
           PAIRING_KEY,
           JSON.stringify(nextPairingData),
         );
+        if (JSON.stringify(parsedSettings) !== JSON.stringify(storedSettings)) {
+          await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(parsedSettings));
+        }
 
         if (parsedSettings.connectionMode === 'cloud') {
           websocketService.disconnect();
@@ -982,6 +989,11 @@ export function AppProvider({ children }) {
         currentPairing.deviceId,
         normalizedName,
         normalizedToken,
+        {
+          deviceType: 'phone',
+          platform: Platform.OS || 'mobile',
+          softwareVersion: MOBILE_APP_VERSION,
+        },
       );
 
       if (!sent) {
@@ -1001,14 +1013,15 @@ export function AppProvider({ children }) {
       throw new Error('Device identity is not ready.');
     }
 
-    await activateCloudMode({ cloud: { relayUrl } });
+    const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
+    await activateCloudMode({ cloud: { relayUrl: normalizedRelayUrl } });
     applySession({ ...EMPTY_SESSION });
     clearPersistedSession().catch(() => {
       console.warn('Unable to reset the previous OpenX session.');
     });
 
     const result = await relayClient.pairWithToken({
-      relayUrl,
+      relayUrl: normalizedRelayUrl,
       pairToken,
       deviceName: normalizedName,
     });
@@ -1019,7 +1032,7 @@ export function AppProvider({ children }) {
       paired: true,
       pairedAt: Date.now(),
       cloudPairing: {
-        relayUrl,
+        relayUrl: normalizedRelayUrl,
         tokenId: result.tokenId || '',
         ownerId: result.ownerId || '',
         desktopDeviceId: result.desktopDeviceId || '',

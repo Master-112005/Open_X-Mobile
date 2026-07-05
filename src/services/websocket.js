@@ -202,7 +202,7 @@ class OpenXWebSocketService {
     }
   }
 
-  sendPairRequest(deviceId, deviceName, token) {
+  sendPairRequest(deviceId, deviceName, token, metadata = {}) {
     if (
       !deviceId ||
       !deviceName.trim() ||
@@ -218,6 +218,9 @@ class OpenXWebSocketService {
       deviceId,
       deviceName: deviceName.trim(),
       token: token.trim(),
+      deviceType: String(metadata.deviceType || 'phone').trim(),
+      platform: String(metadata.platform || 'mobile').trim(),
+      softwareVersion: String(metadata.softwareVersion || metadata.version || '').trim(),
     };
 
     try {
