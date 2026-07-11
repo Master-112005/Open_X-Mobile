@@ -12,14 +12,6 @@ const TRANSFER_TIMEOUT_MS = 10 * 60 * 1000;
 const createId = (prefix) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
-const splitBase64 = (value, size = CHUNK_BASE64_LENGTH) => {
-  const chunks = [];
-  for (let offset = 0; offset < value.length; offset += size) {
-    chunks.push(value.slice(offset, offset + size));
-  }
-  return chunks.length ? chunks : [''];
-};
-
 const base64ByteLength = (value) => {
   if (!value) return 0;
   const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
@@ -52,8 +44,13 @@ class CloudFileTransferManager {
   stop() {
     if (this.unsubscribeRelay) this.unsubscribeRelay();
     this.unsubscribeRelay = null;
-    this.outgoing.forEach((transfer) => clearTimeout(transfer.timeout));
+    this.outgoing.forEach((transfer) => {
+      clearTimeout(transfer.timeout);
+      transfer.reject?.(new Error('Cloud file transfer stopped.'));
+      transfer.data = null;
+    });
     this.incoming.forEach((transfer) => clearTimeout(transfer.timeout));
+    this.incoming.forEach((transfer) => { transfer.chunks.length = 0; });
     this.outgoing.clear();
     this.incoming.clear();
   }
@@ -66,13 +63,14 @@ class CloudFileTransferManager {
     }
     const outgoingFile = await prepareOutgoingFile(file);
     const transferId = createId('cloud_mobile_transfer');
-    const chunks = splitBase64(outgoingFile.data);
+    const chunkCount = Math.max(1, Math.ceil(outgoingFile.data.length / CHUNK_BASE64_LENGTH));
     const transfer = {
       transferId,
       fileName: outgoingFile.fileName,
       fileSize: outgoingFile.fileSize,
       sha256: outgoingFile.hash,
-      chunks,
+      data: outgoingFile.data,
+      chunkCount,
       nextChunkIndex: 0,
       sourceDeviceId: cloudPairing.phoneDeviceId || pairing.deviceId,
       destinationDeviceId: cloudPairing.desktopDeviceId,
@@ -90,7 +88,7 @@ class CloudFileTransferManager {
       sha256: transfer.sha256,
       checksum: transfer.sha256,
       chunkBytes: CHUNK_BASE64_LENGTH,
-      chunkCount: chunks.length,
+      chunkCount,
       protocolVersion: PROTOCOL_VERSION,
       createdAt: Date.now(),
     });
@@ -181,6 +179,7 @@ class CloudFileTransferManager {
       sha256: String(payload.sha256 || payload.checksum || '').toLowerCase(),
       chunkCount: Number(payload.chunkCount) || 1,
       chunks: [],
+      receivedBytes: 0,
       nextChunkIndex: 0,
       sourceDeviceId: packet.sourceDeviceId,
       destinationDeviceId: packet.destinationDeviceId,
@@ -232,6 +231,7 @@ class CloudFileTransferManager {
       return;
     }
     transfer.chunks[index] = chunk;
+    transfer.receivedBytes += base64ByteLength(chunk);
     transfer.nextChunkIndex += 1;
     transfer.state = 'downloading';
     this.refreshTimeout(transfer, 'incoming');
@@ -327,7 +327,7 @@ class CloudFileTransferManager {
 
   async sendNextChunk(transfer) {
     if (!transfer || transfer.paused) return;
-    if (transfer.nextChunkIndex >= transfer.chunks.length) {
+    if (transfer.nextChunkIndex >= transfer.chunkCount) {
       this.sendPacket(transfer, 'complete', {
         transferId: transfer.transferId,
         fileSize: transfer.fileSize,
@@ -339,14 +339,15 @@ class CloudFileTransferManager {
       return;
     }
     const index = transfer.nextChunkIndex;
-    const chunk = transfer.chunks[index] || '';
+    const start = index * CHUNK_BASE64_LENGTH;
+    const chunk = transfer.data.slice(start, start + CHUNK_BASE64_LENGTH);
     const checksum = await hashBase64Chunk(chunk);
     this.sendPacket(transfer, 'chunk', {
       transferId: transfer.transferId,
       chunkIndex: index,
       sequenceNumber: index,
       chunkSize: base64ByteLength(chunk),
-      totalChunks: transfer.chunks.length,
+      totalChunks: transfer.chunkCount,
       data: chunk,
       sha256: checksum,
       checksum,
@@ -400,17 +401,19 @@ class CloudFileTransferManager {
 
   cleanupIncoming(transfer) {
     clearTimeout(transfer.timeout);
+    transfer.chunks.length = 0;
     this.incoming.delete(transfer.transferId);
   }
 
   cleanupOutgoing(transfer, reason) {
     clearTimeout(transfer.timeout);
+    transfer.data = null;
     this.outgoing.delete(transfer.transferId);
     if (!['completed', 'rejected'].includes(reason)) transfer.reject?.(new Error(reason || 'Transfer failed.'));
   }
 
   receivedBytes(transfer) {
-    return base64ByteLength(transfer.chunks.join(''));
+    return transfer.receivedBytes || 0;
   }
 
   publicTransfer(transfer) {
@@ -426,7 +429,7 @@ class CloudFileTransferManager {
       transferredBytes,
       percent: transfer.fileSize > 0 ? Math.min(100, Math.round((transferredBytes / transfer.fileSize) * 100)) : 100,
       currentChunk: transfer.nextChunkIndex || 0,
-      totalChunks: transfer.chunkCount || transfer.chunks?.length || 1,
+      totalChunks: transfer.chunkCount || 1,
     };
   }
 

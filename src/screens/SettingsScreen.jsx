@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -41,100 +40,41 @@ function HeaderButton({ accessibilityLabel, iconName, onPress }) {
 
 export default function SettingsScreen({ navigation }) {
   const {
-    desktopAddress,
-    desktopPort,
-    connectionStatus,
-    connectionMode,
     cloudStatus,
     deviceName,
     permissions,
     permissionsLastUpdated,
     permissionsLoaded,
-    saveSettings,
-    settingsLoaded,
-    testConnection,
     updateDeviceName,
+    showNotice,
   } = useApp();
-  const [address, setAddress] = useState(desktopAddress);
-  const [port, setPort] = useState(desktopPort);
   const [phoneName, setPhoneName] = useState(deviceName);
   const [savingName, setSavingName] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const insets = useSafeAreaInsets();
-
-  useEffect(() => {
-    if (settingsLoaded) {
-      setAddress(desktopAddress);
-      setPort(desktopPort);
-    }
-  }, [desktopAddress, desktopPort, settingsLoaded]);
 
   useEffect(() => {
     setPhoneName(deviceName);
   }, [deviceName]);
 
-  const validatePort = () => /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
-
   const handleSaveDeviceName = async () => {
     const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
     if (!normalizedName) {
-      Alert.alert('Mobile name required', 'Enter a name for this mobile.');
+      showNotice({ title: 'Mobile name required', message: 'Enter a name for this mobile.', tone: 'warning' });
       return;
     }
     setSavingName(true);
     try {
       await updateDeviceName(normalizedName);
-      Alert.alert('Saved', 'This mobile name was saved.');
+      showNotice({ title: 'Saved', message: 'This mobile name was saved.', tone: 'success' });
     } catch (error) {
-      Alert.alert('Unable to save', error.message || 'Please try again.');
+      showNotice({ title: 'Unable to save', message: error.message || 'Please try again.', tone: 'error' });
     } finally {
       setSavingName(false);
     }
   };
 
-  const handleSave = async () => {
-    if (!validatePort()) {
-      Alert.alert('Invalid port', 'Enter a port number between 1 and 65535.');
-      return;
-    }
-    setSaving(true);
-    try {
-      await saveSettings(address, port);
-      Alert.alert('Saved', 'Manual fallback connection was saved.');
-    } catch {
-      Alert.alert('Unable to save', 'Please try again.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    if (!address.trim()) {
-      Alert.alert('Desktop address required', 'Enter the OpenX Desktop IP address.');
-      return;
-    }
-    if (!validatePort()) {
-      Alert.alert('Invalid port', 'Enter a port number between 1 and 65535.');
-      return;
-    }
-    setTesting(true);
-    try {
-      await testConnection(address, port);
-      Alert.alert('Connected', 'OpenX Desktop is reachable.');
-    } catch {
-      Alert.alert('Waiting', 'OpenX Desktop is not reachable yet.');
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const activeStatusText = connectionMode === 'cloud'
-    ? (cloudStatus?.state || 'disconnected')
-    : connectionStatus;
-  const activeConnected = connectionMode === 'cloud'
-    ? cloudStatus?.connected === true
-    : connectionStatus === 'connected';
+  const activeStatusText = cloudStatus?.state || 'disconnected';
+  const activeConnected = cloudStatus?.connected === true;
 
   return (
     <View style={styles.screen}>
@@ -172,7 +112,7 @@ export default function SettingsScreen({ navigation }) {
               </View>
               <View style={styles.summaryText}>
                 <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
-                <Text style={styles.summaryMeta}>{connectionMode === 'cloud' ? 'Cloud relay' : 'Local network'}</Text>
+                <Text style={styles.summaryMeta}>Cloud relay</Text>
               </View>
             </View>
             <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
@@ -229,63 +169,10 @@ export default function SettingsScreen({ navigation }) {
             </Text>
           </GlassPanel>
 
-          <Text style={styles.sectionTitle}>Manual fallback</Text>
-          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            {!settingsLoaded ? (
-              <ActivityIndicator color={colors.text} />
-            ) : (
-              <>
-                <Text style={styles.label}>Desktop address</Text>
-                <TextInput
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  onChangeText={setAddress}
-                  placeholder="192.168.1.100"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="next"
-                  style={styles.input}
-                  value={address}
-                />
-
-                <Text style={[styles.label, styles.fieldGap]}>Port</Text>
-                <TextInput
-                  keyboardType="number-pad"
-                  maxLength={5}
-                  onChangeText={(value) => setPort(value.replace(/\D/g, ''))}
-                  placeholder="8080"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="done"
-                  style={styles.input}
-                  value={port}
-                />
-
-                <View style={styles.buttonRow}>
-                  <GlassButton
-                    disabled={testing || saving}
-                    iconName="pulse-outline"
-                    label="Test"
-                    loading={testing}
-                    onPress={handleTestConnection}
-                    style={styles.buttonFlex}
-                  />
-                  <GlassButton
-                    disabled={saving || testing}
-                    iconName="save-outline"
-                    label="Save"
-                    loading={saving}
-                    onPress={handleSave}
-                    style={styles.buttonFlex}
-                  />
-                </View>
-              </>
-            )}
-          </GlassPanel>
-
           <Text style={styles.sectionTitle}>Advanced connection</Text>
           <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
             <Text style={styles.advancedText}>
-              QR pairing is the normal path. Manual fallback is only for local network troubleshooting.
+              OpenX Mobile uses cloud pairing and the secure relay for commands, notifications, schedules, and file transfers.
             </Text>
           </GlassPanel>
         </ScrollView>

@@ -39,8 +39,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Alert, AppState, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
+import OpenXNotice from '../components/OpenXNotice';
 import { websocketService } from '../services/websocket';
 import {
   MOBILE_APP_VERSION,
@@ -54,7 +55,7 @@ const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Mobile';
-const DEFAULT_CONNECTION_MODE = 'local';
+const DEFAULT_CONNECTION_MODE = 'cloud';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
@@ -111,9 +112,7 @@ const normalizeConnectionSettings = (settings) => {
     settings.serverPort ?? settings.desktopPort ?? DEFAULT_PORT,
   ).trim();
 
-  const connectionMode = settings.connectionMode === 'cloud'
-    ? 'cloud'
-    : DEFAULT_CONNECTION_MODE;
+  const connectionMode = 'cloud';
 
   return {
     connectionMode,
@@ -153,9 +152,7 @@ const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   const [messages, setMessages] = useState(initialMessages);
-  const [connectionStatus, setConnectionStatus] = useState(
-    websocketService.getStatus(),
-  );
+  const [connectionStatus, setConnectionStatus] = useState(relayClient.getStatus().state || 'disconnected');
   const [connectionMode, setConnectionModeState] = useState(DEFAULT_CONNECTION_MODE);
   const [cloudStatus, setCloudStatus] = useState(relayClient.getStatus());
   const [cloudPresence, setCloudPresence] = useState([]);
@@ -178,6 +175,7 @@ export function AppProvider({ children }) {
   const [scheduleItems, setScheduleItems] = useState([]);
   const [schedulesLoaded, setSchedulesLoaded] = useState(false);
   const [scheduleLastSyncedAt, setScheduleLastSyncedAt] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [sessionValid, setSessionValid] = useState(false);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState(null);
@@ -194,9 +192,17 @@ export function AppProvider({ children }) {
   const sessionRef = useRef(EMPTY_SESSION);
   const settingsRef = useRef(normalizeConnectionSettings({}));
 
+  const showNotice = useCallback((nextNotice) => {
+    const normalized = typeof nextNotice === 'string'
+      ? { title: 'OpenX', message: nextNotice }
+      : nextNotice;
+    setNotice({ id: Date.now(), tone: 'info', dismissible: true, ...normalized });
+  }, []);
+
+  const dismissNotice = useCallback(() => setNotice(null), []);
+
   const applyPairingData = useCallback((data) => {
     pairingDataRef.current = data;
-    websocketService.setClientIdentity(data.deviceId, data.deviceName);
     relayClient.setDeviceIdentity({
       deviceId: data.deviceId,
       deviceName: data.deviceName,
@@ -270,22 +276,6 @@ export function AppProvider({ children }) {
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
     return nextSettings;
   }, []);
-
-  const activateLocalMode = useCallback(async (updates = {}) => {
-    relayClient.disconnect('switch-to-local').catch(() => {});
-    const nextSettings = await persistConnectionSettings({
-      ...updates,
-      connectionMode: 'local',
-    });
-    if (nextSettings.serverIp && nextSettings.serverPort) {
-      websocketService
-        .connect(nextSettings.serverIp, nextSettings.serverPort)
-        .catch(() => {
-          // Local service owns status and retry behavior.
-        });
-    }
-    return nextSettings;
-  }, [persistConnectionSettings]);
 
   const activateCloudMode = useCallback(async (updates = {}) => {
     websocketService.disconnect();
@@ -455,6 +445,52 @@ export function AppProvider({ children }) {
     });
   }, [sendCloudScheduleSync]);
 
+  const normalizeCloudAssistantPacket = useCallback((packet = {}) => {
+    const envelope = packet?.payload && typeof packet.payload === 'object' ? packet.payload : {};
+    const nestedPayload = envelope.payload && typeof envelope.payload === 'object'
+      ? envelope.payload
+      : null;
+    const directResult = envelope.result && typeof envelope.result === 'object'
+      ? envelope.result
+      : null;
+    const status = String(envelope.status || (packet.packetType === 'response' ? 'completed' : 'failed')).toLowerCase();
+    const resultSource = nestedPayload || directResult || envelope;
+    const errorMessage = envelope.error?.message || envelope.message || packet.error?.message || '';
+    const responseText =
+      resultSource.response ||
+      resultSource.message ||
+      errorMessage ||
+      (status === 'completed' ? 'Command completed.' : 'Cloud command failed.');
+    const data = resultSource.data && typeof resultSource.data === 'object'
+      ? { ...resultSource.data }
+      : {};
+    if (!Array.isArray(data.choices) && Array.isArray(resultSource.choices)) {
+      data.choices = resultSource.choices;
+    }
+    if (!Array.isArray(data.entries) && Array.isArray(resultSource.entries)) {
+      data.entries = resultSource.entries;
+    }
+    if (!Array.isArray(data.resultEntries) && Array.isArray(resultSource.resultEntries)) {
+      data.resultEntries = resultSource.resultEntries;
+    }
+    return {
+      requestId: envelope.requestId || packet.requestId || '',
+      timestamp: envelope.timestamp || packet.timestamp || Date.now(),
+      responseType: envelope.responseType || packet.metadata?.feature || '',
+      result: {
+        success: resultSource.success !== false && status === 'completed',
+        response: responseText,
+        message: resultSource.message || responseText,
+        intent: resultSource.intent || null,
+        entities: resultSource.entities || null,
+        needsClarification: resultSource.needsClarification === true,
+        requiresConfirmation: resultSource.requiresConfirmation === true,
+        data: Object.keys(data).length > 0 ? data : null,
+        error: resultSource.error || envelope.error?.code || null,
+      },
+    };
+  }, []);
+
   const appendCloudAssistantResult = useCallback((result, timestamp = Date.now()) => {
     const responseText = result?.response || result?.message || 'Command completed.';
     setMessages((current) => [
@@ -513,7 +549,10 @@ export function AppProvider({ children }) {
     });
 
     const unsubscribeCloudStatus = relayClient.subscribeToStatus((status) => {
-      if (mounted) setCloudStatus(status);
+      if (mounted) {
+        setCloudStatus(status);
+        setConnectionStatus(status?.state || (status?.connected ? 'connected' : 'disconnected'));
+      }
     });
 
     const unsubscribeCloudPresence = relayClient.subscribeToPresence((presence) => {
@@ -530,21 +569,23 @@ export function AppProvider({ children }) {
       recordTransfer,
       onIncomingTransfer: (transfer) => {
         if (!mounted) return;
-        Alert.alert(
-          'Incoming OpenX Cloud File',
-          `${transfer.fileName} (${transfer.fileSize} bytes)`,
-          [
+        showNotice({
+          title: 'Incoming cloud file',
+          message: `${transfer.fileName} (${transfer.fileSize} bytes)`,
+          tone: 'info',
+          dismissible: false,
+          actions: [
             {
-              text: 'Reject',
-              style: 'cancel',
+              label: 'Reject',
               onPress: () => cloudFileTransferRef.current?.rejectTransfer(transfer.transferId),
             },
             {
-              text: 'Accept',
+              label: 'Accept',
+              tone: 'primary',
               onPress: () => cloudFileTransferRef.current?.acceptTransfer(transfer.transferId),
             },
           ],
-        );
+        });
       },
       onTransferEvent: (event) => {
         if (!mounted) return;
@@ -587,14 +628,10 @@ export function AppProvider({ children }) {
         if (packet.payload?.snapshot) applyScheduleSnapshot(packet.payload.snapshot);
         return;
       }
-      const response = packet.payload || {};
-      const requestId = response.requestId || packet.requestId || '';
+      const response = normalizeCloudAssistantPacket(packet);
+      const requestId = response.requestId || '';
       if (requestId) clearCloudRequest(requestId);
-      const result = response.payload || {
-        success: response.status === 'completed',
-        response: response.error?.message || 'Command completed.',
-        error: response.error?.code || null,
-      };
+      const result = response.result;
       if (result?.data?.scheduleSync && result.data.snapshot) {
         applyScheduleSnapshot(result.data.snapshot);
         return;
@@ -935,17 +972,10 @@ export function AppProvider({ children }) {
           await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(parsedSettings));
         }
 
-        if (parsedSettings.connectionMode === 'cloud') {
-          websocketService.disconnect();
-          if (parsedSettings.cloud.autoConnect) {
-            relayClient.connect(parsedSettings.cloud).catch(() => {
-              // Cloud status and reconnect are managed by relayClient.
-            });
-          }
-        } else if (savedAddress && savedPort) {
-          relayClient.disconnect('local-mode-startup').catch(() => {});
-          websocketService.connect(savedAddress, savedPort).catch(() => {
-            // Status and indefinite retries are managed by the service.
+        websocketService.disconnect();
+        if (parsedSettings.cloud.autoConnect) {
+          relayClient.connect(parsedSettings.cloud).catch(() => {
+            // Cloud status and reconnect are managed by relayClient.
           });
         }
       } catch (error) {
@@ -989,8 +1019,10 @@ export function AppProvider({ children }) {
     applySession,
     appendCloudAssistantResult,
     clearCloudRequest,
+    normalizeCloudAssistantPacket,
     recordTransfer,
     requestScheduleSync,
+    showNotice,
   ]);
 
   useEffect(() => {
@@ -1223,30 +1255,7 @@ export function AppProvider({ children }) {
     [clearCloudRequest, paired, reconnectActiveConnection],
   );
 
-  const saveSettings = useCallback(async (address, port) => {
-    const nextSettings = await activateLocalMode({
-      serverIp: address,
-      serverPort: port,
-    });
-    if (!nextSettings.serverIp) {
-      websocketService.disconnect();
-    }
-  }, [activateLocalMode]);
-
-  const testConnection = useCallback((address, port) => {
-    activateLocalMode({
-      serverIp: address,
-      serverPort: port,
-    }).catch(() => {});
-    return websocketService.connect(address.trim(), port.trim());
-  }, [activateLocalMode]);
-
-  const setConnectionMode = useCallback(async (mode) => {
-    if (mode === 'cloud') {
-      return activateCloudMode();
-    }
-    return activateLocalMode();
-  }, [activateCloudMode, activateLocalMode]);
+  const setConnectionMode = useCallback(async () => activateCloudMode(), [activateCloudMode]);
 
   const saveCloudSettings = useCallback(async (settings) => {
     const nextSettings = await activateCloudMode({ cloud: settings });
@@ -1268,75 +1277,6 @@ export function AppProvider({ children }) {
     });
     return relayClient.disconnect('manual-disconnect').then(() => nextSettings);
   }, [persistConnectionSettings]);
-
-  const pairDevice = useCallback((name, token) => {
-    const normalizedName = normalizeDeviceName(name);
-    const normalizedToken = token.trim().toUpperCase();
-    const currentPairing = pairingDataRef.current;
-
-    if (!currentPairing.deviceId || !normalizedName || !normalizedToken) {
-      return Promise.reject(new Error('Device name and pairing code are required.'));
-    }
-
-    if (websocketService.getStatus() !== 'connected') {
-      return Promise.reject(new Error(CONNECTION_ERROR_MESSAGE));
-    }
-
-    applySession({ ...EMPTY_SESSION });
-    clearPersistedSession().catch(() => {
-      console.warn('Unable to reset the previous OpenX session.');
-    });
-
-    const previous = pendingPairingRef.current;
-    if (previous) {
-      clearTimeout(previous.timer);
-      previous.reject(new Error('A new pairing attempt was started.'));
-    }
-
-    const nextPairingData = {
-      ...currentPairing,
-      deviceName: normalizedName,
-    };
-    applyPairingData(nextPairingData);
-    AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData)).catch(
-      () => {
-        // Pair success performs a required persistence check before resolving.
-      },
-    );
-
-    return new Promise((resolve, reject) => {
-      const pending = {
-        deviceName: normalizedName,
-        resolve,
-        reject,
-        timer: null,
-      };
-
-      pending.timer = setTimeout(() => {
-        if (pendingPairingRef.current !== pending) return;
-        pendingPairingRef.current = null;
-        reject(new Error('Pairing request timed out.'));
-      }, PAIRING_TIMEOUT_MS);
-
-      pendingPairingRef.current = pending;
-      const sent = websocketService.sendPairRequest(
-        currentPairing.deviceId,
-        normalizedName,
-        normalizedToken,
-        {
-          deviceType: 'phone',
-          platform: Platform.OS || 'mobile',
-          softwareVersion: MOBILE_APP_VERSION,
-        },
-      );
-
-      if (!sent) {
-        clearTimeout(pending.timer);
-        pendingPairingRef.current = null;
-        reject(new Error(CONNECTION_ERROR_MESSAGE));
-      }
-    });
-  }, [applyPairingData, applySession]);
 
   const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, deviceName: name }) => {
     const normalizedName = normalizeDeviceName(name || pairingDataRef.current.deviceName);
@@ -1727,9 +1667,6 @@ export function AppProvider({ children }) {
       sessionValid,
       sessionLoaded,
       sendMessage,
-      saveSettings,
-      testConnection,
-      pairDevice,
       pairCloudDevice,
       updateDeviceName,
       upsertScheduleItem,
@@ -1741,6 +1678,7 @@ export function AppProvider({ children }) {
       clearTransferEvent,
       markCloudNotificationRead,
       dismissCloudNotification,
+      showNotice,
       setConnectionMode,
       saveCloudSettings,
       connectCloud,
@@ -1775,9 +1713,6 @@ export function AppProvider({ children }) {
       sessionValid,
       sessionLoaded,
       sendMessage,
-      saveSettings,
-      testConnection,
-      pairDevice,
       pairCloudDevice,
       updateDeviceName,
       upsertScheduleItem,
@@ -1789,6 +1724,7 @@ export function AppProvider({ children }) {
       clearTransferEvent,
       markCloudNotificationRead,
       dismissCloudNotification,
+      showNotice,
       setConnectionMode,
       saveCloudSettings,
       connectCloud,
@@ -1797,7 +1733,12 @@ export function AppProvider({ children }) {
     ],
   );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+      <OpenXNotice notice={notice} onDismiss={dismissNotice} />
+    </AppContext.Provider>
+  );
 }
 
 export function useApp() {

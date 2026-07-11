@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
-  Alert,
   Animated,
   Pressable,
   StyleSheet,
@@ -28,8 +27,7 @@ export default function QRPairingScreen({ navigation, route }) {
   const {
     deviceName,
     pairCloudDevice,
-    pairDevice,
-    testConnection,
+    showNotice,
   } = useApp();
   const selectedDeviceName = route.params?.deviceName || deviceName;
 
@@ -64,10 +62,16 @@ export default function QRPairingScreen({ navigation, route }) {
   }, [permission?.granted, scanProgress]);
 
   const showScanError = (message) => {
-    Alert.alert('Unable to pair', message, [
-      { text: 'Scan again', onPress: () => setScanLocked(false) },
-      { text: 'Cancel', style: 'cancel', onPress: () => navigation.goBack() },
-    ]);
+    showNotice({
+      title: 'Unable to pair',
+      message,
+      tone: 'error',
+      dismissible: false,
+      actions: [
+        { label: 'Cancel', onPress: () => navigation.goBack() },
+        { label: 'Scan again', tone: 'primary', onPress: () => setScanLocked(false) },
+      ],
+    });
   };
 
   const handleBarcodeScanned = async ({ data }) => {
@@ -77,46 +81,20 @@ export default function QRPairingScreen({ navigation, route }) {
 
     try {
       const payload = parsePairingQrPayload(data);
-      if (payload.mode === 'cloud') {
-        await pairCloudDevice({
-          relayUrl: payload.relayUrl,
-          pairToken: payload.pairToken,
-          deviceName: selectedDeviceName,
-        });
-        Alert.alert('Pairing complete', 'Device paired through the relay successfully.', [
-          { text: 'OK', onPress: () => navigation.popToTop() },
-        ]);
-        return;
+      if (payload.mode !== 'cloud') {
+        throw new Error('Local pairing is no longer supported. Generate a Cloud QR in OpenX Desktop.');
       }
-
-      const port = String(payload.serverPort);
-      const candidates = payload.serverIpCandidates?.length
-        ? payload.serverIpCandidates
-        : [payload.serverIp];
-      let connected = false;
-      let lastConnectionError = null;
-
-      for (const address of candidates) {
-        try {
-          await testConnection(address, port);
-          connected = true;
-          break;
-        } catch (connectionError) {
-          lastConnectionError = connectionError;
-        }
-      }
-
-      if (!connected) {
-        throw new Error(
-          lastConnectionError?.message || 'Waiting for OpenX Desktop...',
-        );
-      }
-
-      await pairDevice(selectedDeviceName, payload.pairingToken);
-
-      Alert.alert('Pairing complete', 'Device paired successfully.', [
-        { text: 'OK', onPress: () => navigation.popToTop() },
-      ]);
+      await pairCloudDevice({
+        relayUrl: payload.relayUrl,
+        pairToken: payload.pairToken,
+        deviceName: selectedDeviceName,
+      });
+      showNotice({
+        title: 'Pairing complete',
+        message: 'Device paired through the relay successfully.',
+        tone: 'success',
+        actions: [{ label: 'Continue', tone: 'primary', onPress: () => navigation.popToTop() }],
+      });
     } catch (error) {
       const message =
         error.message === 'Invalid or expired pairing code.'

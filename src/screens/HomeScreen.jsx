@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   Easing,
   FlatList,
@@ -96,6 +95,7 @@ export default function HomeScreen({ navigation }) {
     sendMessage,
     sendFile,
     reconnectActiveConnection,
+    showNotice,
   } = useApp();
   const [text, setText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -149,7 +149,7 @@ export default function HomeScreen({ navigation }) {
 
   const handlePickFile = async () => {
     if (!canSendFile) {
-      Alert.alert('File transfer unavailable', 'Reconnect and allow file transfer from desktop settings.');
+      showNotice({ title: 'File transfer unavailable', message: cloudStatus?.friendlyMessage || 'Connect and pair with OpenX Desktop before sending a file.', tone: 'warning' });
       return;
     }
     setSelectingFile(true);
@@ -157,7 +157,7 @@ export default function HomeScreen({ navigation }) {
       const file = await pickTransferFile();
       if (file) setSelectedFile(file);
     } catch (error) {
-      Alert.alert('Unable to select file', error.message);
+      showNotice({ title: 'Unable to select file', message: error.message, tone: 'error' });
     } finally {
       setSelectingFile(false);
     }
@@ -171,7 +171,7 @@ export default function HomeScreen({ navigation }) {
         await sendFile(selectedFile);
         setSelectedFile(null);
       } catch (error) {
-        Alert.alert('Transfer failed', error.message);
+        showNotice({ title: 'Transfer failed', message: error.message, tone: 'error' });
       } finally {
         setSendingFile(false);
       }
@@ -190,9 +190,9 @@ export default function HomeScreen({ navigation }) {
 
   const handleReconnect = useCallback(() => {
     reconnectActiveConnection?.().catch((error) => {
-      Alert.alert('Reconnect failed', error.message || 'Unable to reconnect OpenX.');
+      showNotice({ title: 'Unable to reconnect', message: error.message || 'Unable to reconnect OpenX.', tone: 'error' });
     });
-  }, [reconnectActiveConnection]);
+  }, [reconnectActiveConnection, showNotice]);
 
   return (
     <View style={styles.screen}>

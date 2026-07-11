@@ -4,7 +4,6 @@ import * as Sharing from 'expo-sharing';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Linking,
   Modal,
@@ -83,6 +82,7 @@ export default function TransfersScreen({ navigation }) {
     lastTransferEvent,
     transferHistory,
     transfersLoaded,
+    showNotice,
   } = useApp();
   const insets = useSafeAreaInsets();
   const [managedFile, setManagedFile] = useState(null);
@@ -95,43 +95,45 @@ export default function TransfersScreen({ navigation }) {
 
   useEffect(() => {
     if (!lastTransferEvent) return;
-    Alert.alert(
-      lastTransferEvent.type === 'success' ? 'File received' : 'Transfer error',
-      lastTransferEvent.message,
-    );
+    showNotice({
+      title: lastTransferEvent.type === 'success' ? 'File received' : 'Transfer error',
+      message: lastTransferEvent.message,
+      tone: lastTransferEvent.type === 'success' ? 'success' : 'error',
+    });
     clearTransferEvent();
-  }, [clearTransferEvent, lastTransferEvent]);
+  }, [clearTransferEvent, lastTransferEvent, showNotice]);
 
   const shareFile = async (item) => {
     if (item.status !== 'received' || !item.localUri) {
-      Alert.alert('File unavailable', 'This transfer does not have a saved file to share.');
+      showNotice({ title: 'File unavailable', message: 'This transfer does not have a saved file to share.', tone: 'warning' });
       return;
     }
 
     const fileInfo = await FileSystem.getInfoAsync(item.localUri);
     if (!fileInfo.exists) {
-      Alert.alert(
-        'File missing',
-        'This file is no longer in OpenX received storage.',
-        [
-          { text: 'Cancel', style: 'cancel' },
+      showNotice({
+        title: 'File missing',
+        message: 'This file is no longer in OpenX received storage.',
+        tone: 'warning',
+        actions: [
+          { label: 'Cancel' },
           {
-            text: 'Remove',
-            style: 'destructive',
+            label: 'Remove',
+            tone: 'danger',
             onPress: () => {
               deleteReceivedFile(item.id).catch((error) => {
-                Alert.alert('Remove failed', error.message);
+                showNotice({ title: 'Remove failed', message: error.message, tone: 'error' });
               });
             },
           },
         ],
-      );
+      });
       return;
     }
 
     const sharingAvailable = await Sharing.isAvailableAsync();
     if (!sharingAvailable) {
-      Alert.alert('Sharing unavailable', 'This device does not support the native share sheet.');
+      showNotice({ title: 'Sharing unavailable', message: 'This device does not support the native share sheet.', tone: 'warning' });
       return;
     }
 
@@ -150,7 +152,7 @@ export default function TransfersScreen({ navigation }) {
     try {
       const fileInfo = await FileSystem.getInfoAsync(item.localUri);
       if (!fileInfo.exists) {
-        Alert.alert('File missing', 'This file is no longer in OpenX received storage.');
+        showNotice({ title: 'File missing', message: 'This file is no longer in OpenX received storage.', tone: 'warning' });
         return;
       }
       const openUri = Platform.OS === 'android' && typeof FileSystem.getContentUriAsync === 'function'
@@ -165,7 +167,7 @@ export default function TransfersScreen({ navigation }) {
       await shareFile(item);
       closeManageSheet();
     } catch (error) {
-      Alert.alert('Open failed', error.message || 'Unable to open this file.');
+      showNotice({ title: 'Open failed', message: error.message || 'Unable to open this file.', tone: 'error' });
     }
   };
 
@@ -185,7 +187,7 @@ export default function TransfersScreen({ navigation }) {
       await deleteReceivedFile(managedFile.id);
       closeManageSheet();
     } catch (error) {
-      Alert.alert('Delete failed', error.message);
+      showNotice({ title: 'Delete failed', message: error.message, tone: 'error' });
     }
   };
 
@@ -281,7 +283,7 @@ export default function TransfersScreen({ navigation }) {
                           await shareFile(managedFile);
                           closeManageSheet();
                         } catch (error) {
-                          Alert.alert('Share failed', error.message);
+                          showNotice({ title: 'Share failed', message: error.message, tone: 'error' });
                         }
                       }}
                     >

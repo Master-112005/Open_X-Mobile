@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useMemo, useState } from 'react';
 import {
-  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -70,6 +69,7 @@ export default function CalendarScreen({ navigation }) {
     requestScheduleSync,
     upsertScheduleItem,
     removeScheduleItem,
+    showNotice,
   } = useApp();
   const insets = useSafeAreaInsets();
   const [kind, setKind] = useState('Reminder');
@@ -101,12 +101,12 @@ export default function CalendarScreen({ navigation }) {
   const handleSave = async () => {
     const title = message.replace(/\s+/g, ' ').trim();
     if (!title) {
-      Alert.alert('Add details', 'Enter what OpenX should remember.');
+      showNotice({ title: 'Add details', message: 'Enter what OpenX should remember.', tone: 'warning' });
       return;
     }
     const dueAt = new Date(`${dateText.trim()}T${timeText.trim()}:00`);
     if (!Number.isFinite(dueAt.getTime())) {
-      Alert.alert('Check time', 'Use date as YYYY-MM-DD and time as HH:MM.');
+      showNotice({ title: 'Check time', message: 'Use date as YYYY-MM-DD and time as HH:MM.', tone: 'warning' });
       return;
     }
     setSaving(true);
@@ -122,29 +122,30 @@ export default function CalendarScreen({ navigation }) {
       });
       setMessage('');
     } catch (error) {
-      Alert.alert('Unable to save', error.message);
+      showNotice({ title: 'Unable to save', message: error.message, tone: 'error' });
     } finally {
       setSaving(false);
     }
   };
 
   const confirmRemove = (item) => {
-    Alert.alert(
-      'Remove reminder',
-      `Remove "${item.message || item.title}" from your calendar?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
+    showNotice({
+      title: 'Remove reminder',
+      message: `Remove "${item.message || item.title}" from your calendar?`,
+      tone: 'warning',
+      actions: [
+        { label: 'Cancel' },
         {
-          text: 'Remove',
-          style: 'destructive',
+          label: 'Remove',
+          tone: 'danger',
           onPress: () => {
             removeScheduleItem(item.id).catch((error) => {
-              Alert.alert('Unable to remove', error.message);
+              showNotice({ title: 'Unable to remove', message: error.message, tone: 'error' });
             });
           },
         },
       ],
-    );
+    });
   };
 
   return (

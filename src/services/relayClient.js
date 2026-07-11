@@ -1,4 +1,5 @@
 import appConfig from '../../app.json';
+import * as Network from 'expo-network';
 
 const CONNECTION_STATES = new Set([
   'disconnected',
@@ -27,6 +28,22 @@ const withReconnectJitter = (delayMs) => {
   const jitter = delayMs * 0.2 * (Math.random() * 2 - 1);
   return Math.max(250, Math.round(delayMs + jitter));
 };
+
+const OFFLINE_MESSAGE = 'No internet connection. Connect to Wi-Fi or mobile data, then try again.';
+
+async function readNetworkStatus() {
+  try {
+    const state = await Network.getNetworkStateAsync();
+    return {
+      online: state?.isConnected === true && state?.isInternetReachable !== false,
+      connected: state?.isConnected === true,
+      internetReachable: state?.isInternetReachable,
+      type: String(state?.type || 'UNKNOWN').toLowerCase(),
+    };
+  } catch {
+    return { online: null, connected: null, internetReachable: null, type: 'unknown' };
+  }
+}
 
 export const normalizeRelayUrl = (value, fallback = DEFAULT_RELAY_URL) => {
   const raw = String(value || '').trim();
@@ -102,11 +119,13 @@ class RelayClient {
     platform: 'mobile',
     softwareVersion: MOBILE_APP_VERSION,
   };
-  friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
+  friendlyMessage = 'Cloud relay is disconnected.';
   statusListeners = new Set();
   relayListeners = new Set();
   presenceListeners = new Set();
   notificationListeners = new Set();
+  networkStatus = { online: null, connected: null, internetReachable: null, type: 'unknown' };
+  networkSubscription = null;
 
   updateSettings(settings = {}) {
     this.settings = normalizeCloudSettings({ ...this.settings, ...settings });
@@ -114,19 +133,53 @@ class RelayClient {
     return this.getStatus();
   }
 
-  connect(settings = {}) {
+  async connect(settings = {}) {
     this.updateSettings(settings);
     this.manuallyDisconnected = false;
     this.clearReconnectTimer();
+    this.ensureNetworkMonitoring();
 
     if (
       this.status === 'connected' &&
       this.socket?.readyState === WebSocket.OPEN
     ) {
-      return Promise.resolve(this.getStatus());
+      return this.getStatus();
     }
-
+    await this.requireInternetConnection();
     return this.open(false);
+  }
+
+  async requireInternetConnection() {
+    this.networkStatus = await readNetworkStatus();
+    if (this.networkStatus.online !== false) return this.networkStatus;
+    const error = Object.assign(new Error(OFFLINE_MESSAGE), { code: 'NETWORK_OFFLINE' });
+    this.friendlyMessage = error.message;
+    this.setStatus('error');
+    throw error;
+  }
+
+  ensureNetworkMonitoring() {
+    if (this.networkSubscription) return;
+    this.networkSubscription = Network.addNetworkStateListener?.((state) => {
+      const wasOffline = this.networkStatus.online === false;
+      this.networkStatus = {
+        online: state?.isConnected === true && state?.isInternetReachable !== false,
+        connected: state?.isConnected === true,
+        internetReachable: state?.isInternetReachable,
+        type: String(state?.type || 'UNKNOWN').toLowerCase(),
+      };
+      if (this.networkStatus.online === false) {
+        this.clearReconnectTimer();
+        this.friendlyMessage = OFFLINE_MESSAGE;
+        if (!this.manuallyDisconnected) this.setStatus('error');
+        return;
+      }
+      if (wasOffline && !this.manuallyDisconnected && !this.isConnected()) {
+        this.friendlyMessage = 'Internet connection restored. Reconnecting to OpenX...';
+        this.scheduleReconnect();
+      }
+      this.emitStatus();
+    }) || null;
   }
 
   open(isReconnect) {
@@ -165,9 +218,12 @@ class RelayClient {
 
       this.socket = socket;
 
-      this.connectTimeout = setTimeout(() => {
+      this.connectTimeout = setTimeout(async () => {
         if (socket !== this.socket || socket.readyState === WebSocket.OPEN) return;
-        this.friendlyMessage = 'Unable to connect to the relay server.';
+        this.networkStatus = await readNetworkStatus();
+        this.friendlyMessage = this.networkStatus.online === false
+          ? OFFLINE_MESSAGE
+          : 'The internet is available, but the relay server did not respond. Try again shortly.';
         this.setStatus('error');
         try {
           socket.close();
@@ -193,10 +249,13 @@ class RelayClient {
         this.handleMessage(event.data);
       };
 
-      socket.onerror = () => {
+      socket.onerror = async () => {
         if (socket !== this.socket) return;
         this.clearConnectTimeout();
-        this.friendlyMessage = 'Relay server is unavailable.';
+        this.networkStatus = await readNetworkStatus();
+        this.friendlyMessage = this.networkStatus.online === false
+          ? OFFLINE_MESSAGE
+          : 'The internet is available, but the relay server is unavailable. Try again shortly.';
         this.setStatus('error');
         try {
           socket.close();
@@ -220,7 +279,7 @@ class RelayClient {
         this.auth = null;
         this.rejectPendingPairing(new Error('Cloud connection closed.'));
         if (this.manuallyDisconnected || this.status === 'disconnecting') {
-          this.friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
+          this.friendlyMessage = 'Cloud relay is disconnected.';
           this.setStatus('disconnected');
           settleSuccess();
           return;
@@ -240,7 +299,7 @@ class RelayClient {
     this.clearReconnectTimer();
     this.clearConnectTimeout();
     this.stopHeartbeat();
-    this.friendlyMessage = 'Cloud mode is disconnected. Local mode is active.';
+    this.friendlyMessage = 'Cloud relay is disconnected.';
     this.rejectPendingPairing(new Error('Cloud connection disconnected.'));
 
     if (!this.socket) {
@@ -263,12 +322,13 @@ class RelayClient {
     return Promise.resolve(this.getStatus({ reason }));
   }
 
-  reconnect() {
+  async reconnect() {
     if (!this.settings.relayUrl) {
       this.setStatus('disconnected');
-      return Promise.reject(new Error('Relay server is not configured.'));
+      throw new Error('Relay server is not configured.');
     }
     this.manuallyDisconnected = false;
+    await this.requireInternetConnection();
     return this.open(true);
   }
 
@@ -276,6 +336,8 @@ class RelayClient {
     this.statusListeners.clear();
     this.presenceListeners.clear();
     this.notificationListeners.clear();
+    this.networkSubscription?.remove?.();
+    this.networkSubscription = null;
     return this.disconnect('destroy');
   }
 
@@ -308,6 +370,7 @@ class RelayClient {
       presence: [...this.presence],
       notifications: [...this.notifications],
       reliability: this.getReliabilityStatus(),
+      network: { ...this.networkStatus },
       authenticated: Boolean(this.auth?.accessToken),
       friendlyMessage: this.friendlyMessage,
       settings: { ...this.settings },
