@@ -24,6 +24,10 @@ import {
   schedulesFromSnapshot,
 } from '../services/scheduleStore';
 import {
+  formatScheduleDue,
+  parseMobileScheduleCommand,
+} from '../services/mobileScheduleIntelligence';
+import {
   EMPTY_SESSION,
   clearPersistedSession,
   isSessionValid,
@@ -51,20 +55,23 @@ import {
   relayClient,
 } from '../services/relayClient';
 import { CloudFileTransferManager } from '../services/cloudFileTransfer';
+import { subscribeToNativeNotifications } from '../services/nativeNotificationBridge';
 
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const PROFILE_KEY = '@openx/profile';
-const CLOUD_E2EE_KEY = '@openx/cloud/e2ee-master-key';
+const DIRTY_SCHEDULES_KEY = '@openx/schedules/dirty';
+const CLOUD_E2EE_KEY = 'openx.cloud.e2eeMasterKey';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Mobile';
 const DEFAULT_CONNECTION_MODE = 'cloud';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
-const MAX_PENDING_MOBILE_NOTIFICATIONS = 20;
+const MAX_PENDING_MOBILE_NOTIFICATIONS = 50;
+const MOBILE_NOTIFICATION_BURST_WINDOW_MS = 450;
 const MOBILE_NOTIFICATION_DEDUPE_MS = 2500;
-const MAX_RECENT_MOBILE_NOTIFICATION_KEYS = 80;
+const MAX_RECENT_MOBILE_NOTIFICATION_KEYS = 160;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -83,6 +90,25 @@ const parseStoredObject = (value) => {
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
+  }
+};
+
+const loadCloudE2EEKey = async () => {
+  try {
+    return await SecureStore.getItemAsync(CLOUD_E2EE_KEY);
+  } catch {
+    return '';
+  }
+};
+
+const persistCloudE2EEKey = async (masterKey) => {
+  const key = String(masterKey || '').trim();
+  if (!key) return false;
+  try {
+    await SecureStore.setItemAsync(CLOUD_E2EE_KEY, key);
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -150,6 +176,17 @@ const PROFILE_FIELDS = [
 
 const EMPTY_PROFILE = Object.freeze(Object.fromEntries(PROFILE_FIELDS.map((field) => [field, ''])));
 
+const parseStoredArray = (value) => {
+  const parsed = parseStoredObject(value);
+  if (Array.isArray(parsed)) return parsed;
+  try {
+    const direct = JSON.parse(value || '[]');
+    return Array.isArray(direct) ? direct : [];
+  } catch {
+    return [];
+  }
+};
+
 const normalizeOpenXProfile = (profile = {}) => {
   const source = profile && typeof profile === 'object' ? profile : {};
   return Object.fromEntries(PROFILE_FIELDS.map((field) => [
@@ -166,6 +203,7 @@ const normalizeMobileNotification = (notification = {}) => {
   if (!title && !message) return null;
   const packageName = String(notification.packageName || '').trim().slice(0, 120);
   const notificationId = String(notification.notificationId || notification.id || `mobile_notification_${now}_${Math.random().toString(36).slice(2, 8)}`);
+  const repeatCount = Math.max(1, Math.round(Number(notification.repeatCount) || 1));
   const notificationKey = [
     packageName || appName,
     title,
@@ -180,8 +218,10 @@ const normalizeMobileNotification = (notification = {}) => {
     priority: String(notification.priority || 'normal').toLowerCase(),
     category: String(notification.category || 'phone').toLowerCase(),
     timestamp: Number(notification.timestamp) || now,
+    repeatCount,
+    source: String(notification.source || 'mobile').replace(/\s+/g, ' ').trim().slice(0, 80),
     notificationKey,
-    dedupeKey: String(notification.notificationId || notification.id || notificationKey),
+    dedupeKey: String(notification.notificationId || notification.id || notificationKey).toLowerCase(),
     groupKey: String(notification.groupKey || packageName || appName || 'mobile').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase(),
   };
 };
@@ -225,8 +265,10 @@ export function AppProvider({ children }) {
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
   const scheduleItemsRef = useRef([]);
+  const dirtyScheduleIdsRef = useRef(new Set());
   const scheduleNotificationIdsRef = useRef(new Map());
   const pendingMobileNotificationsRef = useRef([]);
+  const mobileNotificationBurstRef = useRef(new Map());
   const recentMobileNotificationKeysRef = useRef(new Map());
   const notificationPermissionRef = useRef(null);
   const sessionRef = useRef(EMPTY_SESSION);
@@ -311,10 +353,34 @@ export function AppProvider({ children }) {
     return merged;
   }, []);
 
+  const persistDirtyScheduleIds = useCallback(() => (
+    AsyncStorage.setItem(DIRTY_SCHEDULES_KEY, JSON.stringify([...dirtyScheduleIdsRef.current]))
+      .catch(() => {
+        console.warn('Unable to persist pending OpenX schedule sync state.');
+      })
+  ), []);
+
+  const markScheduleDirty = useCallback((scheduleId) => {
+    const id = String(scheduleId || '').trim();
+    if (!id) return;
+    dirtyScheduleIdsRef.current.add(id);
+    persistDirtyScheduleIds();
+  }, [persistDirtyScheduleIds]);
+
+  const clearSyncedScheduleIds = useCallback((items = []) => {
+    let changed = false;
+    for (const item of items) {
+      const id = String(item?.id || item?.taskName || '').trim();
+      if (id && dirtyScheduleIdsRef.current.delete(id)) changed = true;
+    }
+    if (changed) persistDirtyScheduleIds();
+  }, [persistDirtyScheduleIds]);
+
   const applyScheduleSnapshot = useCallback((snapshot) => {
     const items = schedulesFromSnapshot(snapshot);
+    clearSyncedScheduleIds(items);
     return applyScheduleItems(items, snapshot?.generatedAt || new Date().toISOString());
-  }, [applyScheduleItems]);
+  }, [applyScheduleItems, clearSyncedScheduleIds]);
 
   const applyOpenXProfile = useCallback((profile, persist = true) => {
     const normalized = normalizeOpenXProfile(profile);
@@ -405,6 +471,17 @@ export function AppProvider({ children }) {
       },
     });
   }, []);
+
+  const flushDirtyScheduleSync = useCallback(() => {
+    if (settingsRef.current.connectionMode !== 'cloud' || !relayClient.isConnected()) return 0;
+    const ids = [...dirtyScheduleIdsRef.current];
+    let sent = 0;
+    for (const id of ids) {
+      const schedule = scheduleItemsRef.current.find((item) => item.id === id || item.taskName === id);
+      if (schedule && sendCloudScheduleSync('upsert', schedule)) sent += 1;
+    }
+    return sent;
+  }, [sendCloudScheduleSync]);
 
   const sendCloudProfileSync = useCallback((action = 'request', profile = null) => {
     const cloudPairing = pairingDataRef.current.cloudPairing || {};
@@ -1041,15 +1118,17 @@ export function AppProvider({ children }) {
           savedSession,
           savedSchedules,
           savedProfile,
+          savedDirtySchedules,
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
-          SecureStore.getItemAsync(CLOUD_E2EE_KEY),
+          loadCloudE2EEKey(),
           loadTransferHistory(),
           loadPermissionState(),
           loadSession(),
           loadSchedules(),
           AsyncStorage.getItem(PROFILE_KEY),
+          AsyncStorage.getItem(DIRTY_SCHEDULES_KEY),
         ]);
         if (!mounted) return;
 
@@ -1078,6 +1157,11 @@ export function AppProvider({ children }) {
         applyPairingData(nextPairingData);
         transferHistoryRef.current = savedTransferHistory;
         setTransferHistory(savedTransferHistory);
+        dirtyScheduleIdsRef.current = new Set(
+          parseStoredArray(savedDirtySchedules)
+            .map((id) => String(id || '').trim())
+            .filter(Boolean),
+        );
         scheduleItemsRef.current = savedSchedules;
         setScheduleItems(savedSchedules);
         applyOpenXProfile(parseStoredObject(savedProfile), false);
@@ -1182,6 +1266,7 @@ export function AppProvider({ children }) {
     if (!settingsLoaded || !pairingLoaded || !paired) return;
     if (connectionMode === 'cloud') {
       if (cloudStatus?.connected) {
+        flushDirtyScheduleSync();
         requestScheduleSync();
         sendCloudProfileSync('request');
       }
@@ -1194,6 +1279,7 @@ export function AppProvider({ children }) {
     cloudStatus?.connected,
     connectionMode,
     connectionStatus,
+    flushDirtyScheduleSync,
     paired,
     pairingLoaded,
     requestScheduleSync,
@@ -1262,15 +1348,65 @@ export function AppProvider({ children }) {
         cancelLocalScheduleNotification(item.id);
         if (!hadScheduledNotification) presentScheduleDueNotification(item);
       });
+      dueNow.forEach((item) => {
+        markScheduleDirty(item.id);
+        if (settingsRef.current.connectionMode === 'cloud') sendCloudScheduleSync('upsert', item);
+      });
     }, Math.max(0, Math.min(next.dueMs - now, 2147483647)));
 
     return () => clearTimeout(timer);
-  }, [cancelLocalScheduleNotification, presentScheduleDueNotification, scheduleItems, schedulesLoaded]);
+  }, [cancelLocalScheduleNotification, markScheduleDirty, presentScheduleDueNotification, scheduleItems, schedulesLoaded, sendCloudScheduleSync]);
+
+  const handleLocalScheduleCommand = useCallback((normalizedText) => {
+    const parsed = parseMobileScheduleCommand(normalizedText);
+    if (!parsed) return false;
+    const now = new Date().toISOString();
+    const schedule = normalizeScheduleItem({
+      ...parsed,
+      id: `OpenX_Mobile_${parsed.kind}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      taskName: `OpenX_Mobile_${parsed.kind}_${Date.now()}`,
+      sourceDeviceId: pairingDataRef.current.deviceId,
+      sourceDeviceName: pairingDataRef.current.deviceName,
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (!schedule) {
+      setMessages((current) => [
+        ...current,
+        createMessage('user', normalizedText),
+        createMessage('assistant', 'I could not understand when to schedule that.'),
+      ]);
+      return true;
+    }
+
+    const merged = mergeScheduleItems(scheduleItemsRef.current, [schedule]);
+    scheduleItemsRef.current = merged;
+    setScheduleItems(merged);
+    persistSchedules(merged).catch(() => {
+      console.warn('Unable to persist OpenX mobile schedule command.');
+    });
+    scheduleLocalScheduleNotification(schedule).catch(() => {
+      console.warn('Unable to schedule OpenX mobile notification.');
+    });
+    markScheduleDirty(schedule.id);
+    if (settingsRef.current.connectionMode === 'cloud') sendCloudScheduleSync('upsert', schedule);
+
+    setMessages((current) => [
+      ...current,
+      createMessage('user', normalizedText),
+      createMessage('assistant', `${schedule.kind} set for ${formatScheduleDue(schedule.dueAt)}.`, Date.now(), {
+        intent: `${String(schedule.kind).toLowerCase()}.set`,
+        data: { schedule },
+      }),
+    ]);
+    return true;
+  }, [markScheduleDirty, scheduleLocalScheduleNotification, sendCloudScheduleSync]);
 
   const sendMessage = useCallback(
     (text) => {
       const normalizedText = text.trim();
       if (!normalizedText) return false;
+      if (handleLocalScheduleCommand(normalizedText)) return true;
       if (settingsRef.current.connectionMode === 'cloud') {
         const cloudPairing = pairingDataRef.current.cloudPairing || {};
         const requestId = Crypto.randomUUID();
@@ -1376,7 +1512,7 @@ export function AppProvider({ children }) {
 
       return true;
     },
-    [clearCloudRequest, paired, reconnectActiveConnection],
+    [clearCloudRequest, handleLocalScheduleCommand, paired, reconnectActiveConnection],
   );
 
   const setConnectionMode = useCallback(async () => activateCloudMode(), [activateCloudMode]);
@@ -1423,7 +1559,7 @@ export function AppProvider({ children }) {
       deviceName: normalizedName,
     });
     if (result.security?.masterKey) {
-      await SecureStore.setItemAsync(CLOUD_E2EE_KEY, result.security.masterKey);
+      persistCloudE2EEKey(result.security.masterKey).catch(() => {});
       relayClient.setE2EEMasterKey(result.security.masterKey);
     }
 
@@ -1503,6 +1639,7 @@ export function AppProvider({ children }) {
     scheduleItemsRef.current = merged;
     setScheduleItems(merged);
     await persistSchedules(merged);
+    markScheduleDirty(normalized.id);
 
     if (settingsRef.current.connectionMode === 'cloud') {
       sendCloudScheduleSync('upsert', normalized);
@@ -1524,7 +1661,7 @@ export function AppProvider({ children }) {
       });
     }
     return normalized;
-  }, [sendCloudScheduleSync]);
+  }, [markScheduleDirty, sendCloudScheduleSync]);
 
   const removeScheduleItem = useCallback(async (scheduleId) => {
     const id = String(scheduleId || '').trim();
@@ -1545,6 +1682,7 @@ export function AppProvider({ children }) {
     setScheduleItems(merged);
     await persistSchedules(merged);
     await cancelLocalScheduleNotification(completed.id);
+    markScheduleDirty(completed.id);
 
     if (settingsRef.current.connectionMode === 'cloud') {
       sendCloudScheduleSync('upsert', completed);
@@ -1566,7 +1704,7 @@ export function AppProvider({ children }) {
       });
     }
     return true;
-  }, [cancelLocalScheduleNotification, sendCloudScheduleSync]);
+  }, [cancelLocalScheduleNotification, markScheduleDirty, sendCloudScheduleSync]);
 
   const forwardMobileNotificationNow = useCallback((normalized) => {
     if (!normalized || !pairingDataRef.current.paired) return false;
@@ -1585,6 +1723,8 @@ export function AppProvider({ children }) {
           packageName: normalized.packageName,
           deviceName: pairingDataRef.current.deviceName,
           timestamp: normalized.timestamp,
+          repeatCount: normalized.repeatCount,
+          source: normalized.source,
           groupKey: normalized.groupKey,
           notificationKey: normalized.notificationKey,
         },
@@ -1603,6 +1743,27 @@ export function AppProvider({ children }) {
     });
   }, []);
 
+  const rememberMobileNotificationKey = useCallback((key) => {
+    const now = Date.now();
+    const recentKeys = recentMobileNotificationKeysRef.current;
+    for (const [recentKey, timestamp] of recentKeys) {
+      if (now - timestamp > MOBILE_NOTIFICATION_DEDUPE_MS) recentKeys.delete(recentKey);
+    }
+    recentKeys.set(key, now);
+    while (recentKeys.size > MAX_RECENT_MOBILE_NOTIFICATION_KEYS) {
+      const oldestKey = recentKeys.keys().next().value;
+      if (!oldestKey) break;
+      recentKeys.delete(oldestKey);
+    }
+  }, []);
+
+  const queuePendingMobileNotification = useCallback((normalized) => {
+    pendingMobileNotificationsRef.current = [
+      ...pendingMobileNotificationsRef.current.filter((item) => item.notificationId !== normalized.notificationId),
+      normalized,
+    ].slice(-MAX_PENDING_MOBILE_NOTIFICATIONS);
+  }, []);
+
   const flushPendingMobileNotifications = useCallback(() => {
     const pending = pendingMobileNotificationsRef.current;
     if (pending.length === 0) return 0;
@@ -1619,6 +1780,23 @@ export function AppProvider({ children }) {
     return sent;
   }, [forwardMobileNotificationNow]);
 
+  const flushMobileNotificationBurst = useCallback((dedupeKey) => {
+    const key = String(dedupeKey || '').toLowerCase();
+    const entry = mobileNotificationBurstRef.current.get(key);
+    if (!entry) return false;
+    if (entry.timer) clearTimeout(entry.timer);
+    mobileNotificationBurstRef.current.delete(key);
+    const normalized = {
+      ...entry.notification,
+      repeatCount: Math.max(1, Math.round(Number(entry.repeatCount) || 1)),
+    };
+    rememberMobileNotificationKey(key);
+    if (forwardMobileNotificationNow(normalized)) return true;
+    queuePendingMobileNotification(normalized);
+    reconnectActiveConnection().catch(() => {});
+    return false;
+  }, [forwardMobileNotificationNow, queuePendingMobileNotification, reconnectActiveConnection, rememberMobileNotificationKey]);
+
   const sendMobileNotification = useCallback((notification) => {
     const normalized = normalizeMobileNotification(notification);
     if (!normalized || !pairingDataRef.current.paired) return false;
@@ -1627,21 +1805,28 @@ export function AppProvider({ children }) {
     for (const [key, timestamp] of recentKeys) {
       if (now - timestamp > MOBILE_NOTIFICATION_DEDUPE_MS) recentKeys.delete(key);
     }
-    if (recentKeys.has(normalized.dedupeKey)) return true;
-    recentKeys.set(normalized.dedupeKey, now);
-    if (recentKeys.size > MAX_RECENT_MOBILE_NOTIFICATION_KEYS) {
-      const oldestKey = recentKeys.keys().next().value;
-      if (oldestKey) recentKeys.delete(oldestKey);
-    }
-    if (forwardMobileNotificationNow(normalized)) return true;
+    const seenRecently = recentKeys.has(normalized.dedupeKey);
+    const existing = mobileNotificationBurstRef.current.get(normalized.dedupeKey);
+    const entry = existing || { notification: normalized, repeatCount: 0, timer: null };
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.notification = {
+      ...entry.notification,
+      ...normalized,
+      notificationId: entry.notification.notificationId || normalized.notificationId,
+      timestamp: Math.max(Number(entry.notification.timestamp) || 0, Number(normalized.timestamp) || 0) || normalized.timestamp,
+    };
+    entry.repeatCount += Math.max(1, Number(normalized.repeatCount) || 1);
+    mobileNotificationBurstRef.current.set(normalized.dedupeKey, entry);
 
-    pendingMobileNotificationsRef.current = [
-      ...pendingMobileNotificationsRef.current.filter((item) => item.notificationId !== normalized.notificationId),
-      normalized,
-    ].slice(-MAX_PENDING_MOBILE_NOTIFICATIONS);
-    reconnectActiveConnection().catch(() => {});
-    return false;
-  }, [forwardMobileNotificationNow, reconnectActiveConnection]);
+    const delay = normalized.priority === 'critical'
+      ? 0
+      : (seenRecently ? MOBILE_NOTIFICATION_DEDUPE_MS : MOBILE_NOTIFICATION_BURST_WINDOW_MS);
+    if (delay === 0) return flushMobileNotificationBurst(normalized.dedupeKey);
+    entry.timer = setTimeout(() => {
+      flushMobileNotificationBurst(normalized.dedupeKey);
+    }, delay);
+    return true;
+  }, [flushMobileNotificationBurst]);
 
   useEffect(() => {
     const isReady = settingsRef.current.connectionMode === 'cloud'
@@ -1667,6 +1852,19 @@ export function AppProvider({ children }) {
     });
     return () => {
       if (typeof subscription?.remove === 'function') subscription.remove();
+    };
+  }, [sendMobileNotification]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToNativeNotifications((notification) => {
+      sendMobileNotification(notification);
+    });
+    return () => {
+      unsubscribe();
+      for (const entry of mobileNotificationBurstRef.current.values()) {
+        if (entry.timer) clearTimeout(entry.timer);
+      }
+      mobileNotificationBurstRef.current.clear();
     };
   }, [sendMobileNotification]);
 

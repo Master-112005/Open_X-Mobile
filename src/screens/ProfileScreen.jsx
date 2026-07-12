@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import packageJson from '../../package.json';
 import {
+  Animated,
+  Easing,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,18 +10,43 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
+const PROFILE_FIELDS = [
+  ['fullName', 'Name'],
+  ['email', 'Email'],
+  ['phone', 'Phone'],
+  ['company', 'Company'],
+  ['role', 'Role'],
+  ['country', 'Country'],
+  ['addressLine1', 'Address'],
+  ['city', 'City'],
+  ['state', 'State'],
+  ['postalCode', 'Postal Code'],
+];
+
 function InfoRow({ label, value }) {
   return (
     <View style={styles.infoRow}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text numberOfLines={1} style={styles.infoValue}>{value || '--'}</Text>
+    </View>
+  );
+}
+
+function ProfileValueRow({ label, value }) {
+  return (
+    <View style={styles.profileValueRow}>
+      <Text style={styles.profileValueText} numberOfLines={2}>
+        <Text style={styles.profileValueLabel}>{label}</Text>
+        <Text style={styles.profileSeparator}> :- </Text>
+        <Text>{value || '--'}</Text>
+      </Text>
     </View>
   );
 }
@@ -52,6 +79,8 @@ export default function ProfileScreen({ navigation }) {
   } = useApp();
   const [draftProfile, setDraftProfile] = useState(openXProfile || {});
   const [savingProfile, setSavingProfile] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const editAnimation = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
   const isCloud = connectionMode === 'cloud';
   const status = isCloud ? cloudStatus?.state : connectionStatus;
@@ -62,6 +91,15 @@ export default function ProfileScreen({ navigation }) {
     setDraftProfile(openXProfile || {});
   }, [openXProfile]);
 
+  useEffect(() => {
+    Animated.timing(editAnimation, {
+      toValue: editingProfile ? 1 : 0,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [editAnimation, editingProfile]);
+
   const updateProfileField = (field, value) => {
     setDraftProfile((current) => ({ ...current, [field]: value }));
   };
@@ -70,9 +108,59 @@ export default function ProfileScreen({ navigation }) {
     setSavingProfile(true);
     try {
       await saveOpenXProfile(draftProfile);
+      setEditingProfile(false);
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  const handleCancelEdit = () => {
+    setDraftProfile(openXProfile || {});
+    setEditingProfile(false);
+  };
+
+  const toggleProfileEditor = () => {
+    if (editingProfile) {
+      handleCancelEdit();
+      return;
+    }
+    setDraftProfile(openXProfile || {});
+    setEditingProfile(true);
+  };
+
+  const editorStyle = {
+    maxHeight: editAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0, 430],
+    }),
+    opacity: editAnimation,
+    transform: [{
+      translateY: editAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-10, 0],
+      }),
+    }],
+    paddingTop: editAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0, spacing.md],
+    }),
+  };
+
+  const summaryStyle = {
+    maxHeight: editAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [320, 0],
+    }),
+    opacity: editAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 0],
+    }),
+    transform: [{
+      translateY: editAnimation.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, -8],
+      }),
+    }],
   };
 
   return (
@@ -103,7 +191,7 @@ export default function ProfileScreen({ navigation }) {
           </View>
         </GlassPanel>
 
-        <Text style={styles.sectionTitle}>Device</Text>
+        <Text style={styles.standaloneSectionTitle}>Device</Text>
         <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
           <InfoRow label="Name" value={deviceName} />
           <InfoRow label="Device ID" value={deviceId} />
@@ -111,44 +199,73 @@ export default function ProfileScreen({ navigation }) {
           <InfoRow label="Platform" value="Mobile" />
         </GlassPanel>
 
-        <Text style={styles.sectionTitle}>OpenX Profile</Text>
-        <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-          {[
-            ['fullName', 'Full Name'],
-            ['email', 'Email'],
-            ['phone', 'Phone'],
-            ['company', 'Company'],
-            ['role', 'Role'],
-            ['country', 'Country'],
-            ['addressLine1', 'Address'],
-            ['city', 'City'],
-            ['state', 'State'],
-            ['postalCode', 'Postal Code'],
-          ].map(([field, label]) => (
-            <View key={field} style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>{label}</Text>
-              <TextInput
-                autoCapitalize={field === 'email' ? 'none' : 'words'}
-                keyboardType={field === 'email' ? 'email-address' : field === 'phone' ? 'phone-pad' : 'default'}
-                onChangeText={(value) => updateProfileField(field, value)}
-                placeholder="--"
-                placeholderTextColor={colors.textMuted}
-                style={styles.input}
-                value={draftProfile?.[field] || ''}
-              />
-            </View>
-          ))}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>OpenX Profile</Text>
           <Pressable
+            accessibilityLabel={editingProfile ? 'Close profile editor' : 'Edit profile'}
             accessibilityRole="button"
-            disabled={savingProfile}
-            onPress={handleSaveProfile}
-            style={({ pressed }) => [styles.saveButton, pressed && styles.pressed, savingProfile && styles.disabled]}
+            onPress={toggleProfileEditor}
+            style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}
           >
-            <Text style={styles.saveButtonText}>{savingProfile ? 'Saving...' : 'Save Profile'}</Text>
+            <Ionicons color={colors.text} name={editingProfile ? 'close' : 'create-outline'} size={18} />
           </Pressable>
+        </View>
+        <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+          <Animated.View pointerEvents={editingProfile ? 'none' : 'auto'} style={[styles.profileValueList, summaryStyle]}>
+            <ScrollView
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={styles.profileFieldScroll}
+            >
+              {PROFILE_FIELDS.map(([field, label]) => (
+                <ProfileValueRow key={field} label={label} value={openXProfile?.[field]} />
+              ))}
+            </ScrollView>
+          </Animated.View>
+          <Animated.View pointerEvents={editingProfile ? 'auto' : 'none'} style={[styles.profileEditor, editorStyle]}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={false}
+              style={styles.profileEditorScroll}
+            >
+              {PROFILE_FIELDS.map(([field, label]) => (
+                <View key={field} style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>{label}</Text>
+                  <TextInput
+                    autoCapitalize={field === 'email' ? 'none' : 'words'}
+                    keyboardType={field === 'email' ? 'email-address' : field === 'phone' ? 'phone-pad' : 'default'}
+                    onChangeText={(value) => updateProfileField(field, value)}
+                    placeholder="--"
+                    placeholderTextColor={colors.textMuted}
+                    style={styles.input}
+                    value={draftProfile?.[field] || ''}
+                  />
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.profileEditorActions}>
+              <Pressable
+                accessibilityRole="button"
+                disabled={savingProfile}
+                onPress={handleCancelEdit}
+                style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed, savingProfile && styles.disabled]}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={savingProfile}
+                onPress={handleSaveProfile}
+                style={({ pressed }) => [styles.saveButton, pressed && styles.pressed, savingProfile && styles.disabled]}
+              >
+                <Text style={styles.saveButtonText}>{savingProfile ? 'Saving...' : 'Save Profile'}</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
         </GlassPanel>
 
-        <Text style={styles.sectionTitle}>Connection</Text>
+        <Text style={styles.standaloneSectionTitle}>Connection</Text>
         <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
           <InfoRow label="Mode" value={isCloud ? 'Cloud relay' : 'Local network'} />
           <InfoRow label="Paired" value={paired ? 'Yes' : 'No'} />
@@ -270,14 +387,67 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     fontWeight: '900',
+  },
+  standaloneSectionTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '900',
     marginBottom: spacing.sm,
     marginTop: spacing.lg,
+  },
+  sectionHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  editButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
   },
   card: {
     borderRadius: radius.lg,
   },
   cardContent: {
     padding: spacing.lg,
+  },
+  profileValueList: {
+    overflow: 'hidden',
+  },
+  profileFieldScroll: {
+    maxHeight: 320,
+  },
+  profileValueRow: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    minHeight: 34,
+    paddingVertical: spacing.xs,
+  },
+  profileValueText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  profileValueLabel: {
+    color: colors.textMuted,
+    fontWeight: '900',
+  },
+  profileSeparator: {
+    color: colors.textMuted,
+  },
+  profileEditor: {
+    overflow: 'hidden',
+  },
+  profileEditorScroll: {
+    maxHeight: 346,
   },
   inputGroup: {
     gap: spacing.xs,
@@ -305,8 +475,8 @@ const styles = StyleSheet.create({
     borderColor: colors.borderBright,
     borderWidth: 1,
     borderRadius: radius.md,
+    flex: 1,
     justifyContent: 'center',
-    marginTop: spacing.xs,
     minHeight: 46,
   },
   saveButtonText: {
@@ -316,6 +486,26 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.62,
+  },
+  profileEditorActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  cancelButton: {
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  cancelButtonText: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '900',
   },
   infoRow: {
     alignItems: 'center',

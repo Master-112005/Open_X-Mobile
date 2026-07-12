@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatBubble from '../components/ChatBubble';
 import { useApp } from '../context/AppContext';
 import { formatFileSize, pickTransferFile } from '../services/fileTransfer';
+import { parseMobileScheduleCommand } from '../services/mobileScheduleIntelligence';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
 function FloatingButton({ iconName, label, onPress, accessibilityLabel }) {
@@ -126,7 +127,8 @@ export default function HomeScreen({ navigation }) {
               ? 'Session expired. Reconnect with QR.'
               : null;
 
-  const canSendText = !commandRestriction && text.trim().length > 0;
+  const localScheduleCommand = useMemo(() => parseMobileScheduleCommand(text), [text]);
+  const canSendText = text.trim().length > 0 && (!commandRestriction || Boolean(localScheduleCommand));
   const canSendFile = connectionMode === 'cloud'
     ? paired && cloudStatus?.connected
     : paired &&
@@ -138,6 +140,7 @@ export default function HomeScreen({ navigation }) {
 
   const composerHint = useMemo(() => {
     if (selectedFile) return selectedFile.fileName;
+    if (commandRestriction) return 'Try: remind me in 10 minutes';
     return commandRestriction || 'Message OpenX';
   }, [commandRestriction, selectedFile]);
 
@@ -291,7 +294,7 @@ export default function HomeScreen({ navigation }) {
               ) : (
                 <TextInput
                   accessibilityLabel="Message OpenX"
-                  editable={!commandRestriction}
+                  editable
                   maxLength={1000}
                   multiline
                   onChangeText={setText}

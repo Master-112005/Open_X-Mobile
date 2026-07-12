@@ -226,7 +226,7 @@ export default function CalendarScreen({ navigation }) {
                 </View>
                 <View style={styles.scheduleBody}>
                   <Text numberOfLines={2} style={styles.scheduleTitle}>{item.message || item.title}</Text>
-                  <Text style={styles.scheduleMeta}>{formatTime(item.dueAt)} · {item.kind}</Text>
+                  <Text style={styles.scheduleMeta}>{formatTime(item.dueAt)} - {item.kind}</Text>
                 </View>
                 <View style={[styles.statusDot, item.status === 'due' ? styles.dueDot : styles.scheduledDot]} />
                 <Pressable

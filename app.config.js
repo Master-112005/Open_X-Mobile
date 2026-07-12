@@ -29,7 +29,8 @@ module.exports = {
       'expo-font',
       'expo-notifications',
       'expo-secure-store',
-      'expo-sharing'
+      'expo-sharing',
+      './plugins/withOpenXNotificationListener'
     ],
     android: {
       package: 'com.openx.mobile',

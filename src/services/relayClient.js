@@ -101,6 +101,7 @@ class RelayClient {
   connectedAt = null;
   lastConnectedAt = null;
   lastDisconnectedAt = null;
+  activeRelayUrl = '';
   clientId = '';
   serverVersion = '';
   device = null;
@@ -193,6 +194,7 @@ class RelayClient {
     this.friendlyMessage = isReconnect
       ? 'Connection dropped. Reconnecting safely...'
       : 'Connecting to the relay server...';
+    const socketRelayUrl = this.settings.relayUrl;
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -211,7 +213,7 @@ class RelayClient {
       };
 
       try {
-        socket = new WebSocket(this.settings.relayUrl);
+        socket = new WebSocket(socketRelayUrl);
       } catch {
         const error = new Error('Unable to connect to the relay server.');
         this.setStatus('error');
@@ -241,6 +243,7 @@ class RelayClient {
         this.clearConnectTimeout();
         this.connectedAt = Date.now();
         this.lastConnectedAt = this.connectedAt;
+        this.activeRelayUrl = socketRelayUrl;
         this.reconnectAttempts = 0;
         this.friendlyMessage = 'Connected to the relay server.';
         this.setStatus('connected');
@@ -277,6 +280,7 @@ class RelayClient {
         this.lastDisconnectedAt = Date.now();
         this.clientId = '';
         this.serverVersion = '';
+        this.activeRelayUrl = '';
         this.device = null;
         this.owner = null;
         this.presence = [];
@@ -318,6 +322,7 @@ class RelayClient {
     this.lastDisconnectedAt = Date.now();
     this.clientId = '';
     this.serverVersion = '';
+    this.activeRelayUrl = '';
     this.device = null;
     this.owner = null;
     this.presence = [];
@@ -359,6 +364,7 @@ class RelayClient {
       state: this.status,
       connected: this.isConnected(),
       relayUrl: this.settings.relayUrl,
+      activeRelayUrl: this.activeRelayUrl,
       reconnectAttempts: this.reconnectAttempts,
       connectedAt: this.connectedAt,
       lastConnectedAt: this.lastConnectedAt,
@@ -547,7 +553,7 @@ class RelayClient {
     const targetRelayUrl = relayUrl ? normalizeRelayUrl(relayUrl, this.settings.relayUrl) : '';
     const nextSettings = targetRelayUrl ? { relayUrl: targetRelayUrl } : {};
     if (this.isConnected()) {
-      const currentRelayUrl = normalizeRelayUrl(this.settings.relayUrl);
+      const currentRelayUrl = normalizeRelayUrl(this.activeRelayUrl || this.settings.relayUrl);
       if (targetRelayUrl && currentRelayUrl !== targetRelayUrl) {
         return this.disconnect('pairing-relay-switch')
           .then(() => this.connect(nextSettings))
