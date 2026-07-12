@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Crypto from 'expo-crypto';
 import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
 import * as FileSystem from 'expo-file-system/legacy';
+import forge from 'node-forge/lib/forge';
+import 'node-forge/lib/sha256';
 
 export const MAX_FILE_SIZE = 100 * 1024 * 1024;
 export const MAX_HISTORY_ITEMS = 100;
+export const FILE_READ_CHUNK_BYTES = 64 * 1024;
 
 const TRANSFER_HISTORY_KEY = '@openx/transfer-history';
 const RECEIVED_DIRECTORY_NAME = 'received-files';
@@ -57,15 +58,42 @@ const assertFileSize = (size) => {
   }
 };
 
-const arrayBufferToHex = (buffer) =>
-  Array.from(new Uint8Array(buffer), (byte) =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('');
+const normalizeBase64 = (data) => String(data || '').replace(/\s/g, '');
 
-export async function calculateFileHash(uri) {
-  const bytes = await new File(uri).bytes();
-  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
-  return arrayBufferToHex(digest);
+export async function readFileChunkBase64(uri, position, length) {
+  if (!uri || !Number.isFinite(position) || position < 0 || !Number.isFinite(length) || length < 0) {
+    throw new Error('Invalid file chunk request.');
+  }
+  if (length === 0) return '';
+
+  const data = await FileSystem.readAsStringAsync(uri, {
+    encoding: FileSystem.EncodingType.Base64,
+    position,
+    length,
+  });
+  const normalized = normalizeBase64(data);
+  if (normalized.length % 4 !== 0 || !/^[a-zA-Z0-9+/]*={0,2}$/.test(normalized)) {
+    throw new Error('Invalid file chunk data.');
+  }
+  return normalized;
+}
+
+export async function calculateFileHash(uri, size = null) {
+  const info = Number.isFinite(size)
+    ? { exists: true, isDirectory: false, size }
+    : await FileSystem.getInfoAsync(uri);
+  if (!info.exists || info.isDirectory) {
+    throw new Error('Unable to access the selected file.');
+  }
+
+  const md = forge.md.sha256.create();
+  const totalBytes = Number(info.size) || 0;
+  for (let position = 0; position < totalBytes; position += FILE_READ_CHUNK_BYTES) {
+    const length = Math.min(FILE_READ_CHUNK_BYTES, totalBytes - position);
+    const chunk = await readFileChunkBase64(uri, position, length);
+    md.update(forge.util.decode64(chunk), 'raw');
+  }
+  return md.digest().toHex();
 }
 
 export async function pickTransferFile() {
@@ -104,23 +132,41 @@ export async function prepareOutgoingFile(file) {
   }
 
   try {
+    const metadata = await prepareOutgoingFileMetadata(file);
+    const data = await readFileChunkBase64(file.uri, 0, metadata.fileSize);
+    const encodedSize = getBase64ByteLength(data);
+    assertFileSize(encodedSize);
+
+    return {
+      fileName: metadata.fileName,
+      fileSize: encodedSize,
+      data,
+      hash: metadata.hash,
+    };
+  } catch (error) {
+    if (error.message?.includes('100 MB')) throw error;
+    throw new Error('Unable to read the selected file.');
+  }
+}
+
+export async function prepareOutgoingFileMetadata(file) {
+  if (!file?.uri || !file.fileName) {
+    throw new Error('Select a valid file first.');
+  }
+
+  try {
     const info = await FileSystem.getInfoAsync(file.uri);
     if (!info.exists || info.isDirectory) {
       throw new Error('Unable to access the selected file.');
     }
     assertFileSize(info.size);
 
-    const data = await FileSystem.readAsStringAsync(file.uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    const encodedSize = getBase64ByteLength(data);
-    assertFileSize(encodedSize);
-    const hash = await calculateFileHash(file.uri);
-
+    const hash = await calculateFileHash(file.uri, info.size);
     return {
+      uri: file.uri,
       fileName: sanitizeFileName(file.fileName),
-      fileSize: encodedSize,
-      data,
+      fileSize: Number(info.size) || 0,
+      mimeType: file.mimeType || 'application/octet-stream',
       hash,
     };
   } catch (error) {

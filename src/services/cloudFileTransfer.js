@@ -1,13 +1,20 @@
 import * as Crypto from 'expo-crypto';
 import {
+  MAX_FILE_SIZE,
   createTransferRecord,
-  prepareOutgoingFile,
+  prepareOutgoingFileMetadata,
+  readFileChunkBase64,
   storeIncomingFile,
 } from './fileTransfer';
 
 const PROTOCOL_VERSION = 1;
-const CHUNK_BASE64_LENGTH = 16000;
+const CHUNK_BYTES = 12 * 1024;
 const TRANSFER_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_ACTIVE_TRANSFERS = 3;
+const MAX_MOBILE_RECEIVE_BYTES = Math.min(MAX_FILE_SIZE, 32 * 1024 * 1024);
+const MAX_CHUNK_COUNT = Math.ceil(MAX_FILE_SIZE / CHUNK_BYTES);
+const TRANSFER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
 const createId = (prefix) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
@@ -16,6 +23,17 @@ const base64ByteLength = (value) => {
   if (!value) return 0;
   const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
   return Math.floor((value.length * 3) / 4) - padding;
+};
+
+const isSafeBase64 = (value) =>
+  typeof value === 'string' &&
+  value.length % 4 === 0 &&
+  /^[a-zA-Z0-9+/]*={0,2}$/.test(value);
+
+const sanitizeIncomingFileName = (value) => {
+  const leafName = String(value || '').split(/[\\/]/).pop()?.trim() || 'received-file';
+  const sanitized = leafName.replace(/[^a-zA-Z0-9._() -]/g, '_').slice(0, 120);
+  return sanitized || 'received-file';
 };
 
 async function hashBase64Chunk(base64) {
@@ -47,7 +65,7 @@ class CloudFileTransferManager {
     this.outgoing.forEach((transfer) => {
       clearTimeout(transfer.timeout);
       transfer.reject?.(new Error('Cloud file transfer stopped.'));
-      transfer.data = null;
+      transfer.sourceUri = null;
     });
     this.incoming.forEach((transfer) => clearTimeout(transfer.timeout));
     this.incoming.forEach((transfer) => { transfer.chunks.length = 0; });
@@ -61,15 +79,18 @@ class CloudFileTransferManager {
     if (!this.relayClient.isConnected() || !cloudPairing.ownerId || !cloudPairing.desktopDeviceId) {
       throw new Error('Cloud is not ready. Connect and pair this phone with OpenX Desktop.');
     }
-    const outgoingFile = await prepareOutgoingFile(file);
+    const outgoingFile = await prepareOutgoingFileMetadata(file);
+    if (this.activeTransferCount() >= MAX_ACTIVE_TRANSFERS) {
+      throw new Error('Too many active file transfers. Wait for one to finish first.');
+    }
     const transferId = createId('cloud_mobile_transfer');
-    const chunkCount = Math.max(1, Math.ceil(outgoingFile.data.length / CHUNK_BASE64_LENGTH));
+    const chunkCount = Math.max(1, Math.ceil(outgoingFile.fileSize / CHUNK_BYTES));
     const transfer = {
       transferId,
       fileName: outgoingFile.fileName,
       fileSize: outgoingFile.fileSize,
       sha256: outgoingFile.hash,
-      data: outgoingFile.data,
+      sourceUri: outgoingFile.uri,
       chunkCount,
       nextChunkIndex: 0,
       sourceDeviceId: cloudPairing.phoneDeviceId || pairing.deviceId,
@@ -80,18 +101,22 @@ class CloudFileTransferManager {
     };
     this.outgoing.set(transferId, transfer);
     transfer.timeout = this.createTimeout(transferId, 'outgoing');
-    this.sendPacket(transfer, 'metadata', {
+    const metadataSent = this.sendPacket(transfer, 'metadata', {
       transferId,
       fileName: transfer.fileName,
       fileSize: transfer.fileSize,
-      mimeType: file.mimeType || 'application/octet-stream',
+      mimeType: outgoingFile.mimeType || 'application/octet-stream',
       sha256: transfer.sha256,
       checksum: transfer.sha256,
-      chunkBytes: CHUNK_BASE64_LENGTH,
+      chunkBytes: CHUNK_BYTES,
       chunkCount,
       protocolVersion: PROTOCOL_VERSION,
       createdAt: Date.now(),
     });
+    if (!metadataSent) {
+      this.cleanupOutgoing(transfer, 'relay-send-failed');
+      throw new Error('Cloud relay could not send the transfer metadata.');
+    }
     this.emitEvent('started', transfer);
     return new Promise((resolve, reject) => {
       transfer.resolve = resolve;
@@ -103,10 +128,15 @@ class CloudFileTransferManager {
     const transfer = this.incoming.get(transferId);
     if (!transfer) return false;
     transfer.state = 'accepted';
-    this.sendPacket(transfer, 'accept', {
+    const accepted = this.sendPacket(transfer, 'accept', {
       transferId,
       nextChunkIndex: transfer.nextChunkIndex,
     });
+    if (!accepted) {
+      this.cleanupIncoming(transfer, 'relay-send-failed');
+      this.emitEvent('failed', transfer, { reason: 'relay-send-failed' });
+      return false;
+    }
     this.emitEvent('accepted', transfer);
     return true;
   }
@@ -162,9 +192,29 @@ class CloudFileTransferManager {
     if (action === 'metadata') return this.handleMetadata(packet, payload);
     if (action === 'accept') return this.handleAccept(payload);
     if (action === 'reject') return this.handleReject(payload);
-    if (action === 'chunk') return this.handleChunk(packet, payload);
+    if (action === 'chunk') {
+      this.handleChunk(packet, payload).catch((error) => {
+        const transferId = String(payload.transferId || '');
+        const transfer = this.incoming.get(transferId);
+        if (transfer) {
+          this.cancelTransfer(transferId, 'chunk-processing-failed');
+          this.emitEvent('failed', transfer, { reason: 'chunk-processing-failed', error: error.message });
+        }
+      });
+      return;
+    }
     if (action === 'chunk-ack') return this.handleChunkAck(payload);
-    if (action === 'complete') return this.handleComplete(payload);
+    if (action === 'complete') {
+      this.handleComplete(payload).catch((error) => {
+        const transferId = String(payload.transferId || '');
+        const transfer = this.incoming.get(transferId);
+        if (transfer) {
+          this.cancelTransfer(transferId, 'completion-failed');
+          this.emitEvent('failed', transfer, { reason: 'completion-failed', error: error.message });
+        }
+      });
+      return;
+    }
     if (action === 'complete-ack') return this.handleCompleteAck(payload);
     if (action === 'cancel') return this.handleCancel(payload);
     if (action === 'pause') return this.handlePause(payload);
@@ -172,12 +222,16 @@ class CloudFileTransferManager {
   }
 
   handleMetadata(packet, payload) {
+    const transferId = String(payload.transferId || '').trim();
+    const fileSize = Number(payload.fileSize);
+    const chunkCount = Number(payload.chunkCount) || 0;
+    const sha256 = String(payload.sha256 || payload.checksum || '').toLowerCase();
     const transfer = {
-      transferId: String(payload.transferId || ''),
-      fileName: String(payload.fileName || 'received-file'),
-      fileSize: Number(payload.fileSize) || 0,
-      sha256: String(payload.sha256 || payload.checksum || '').toLowerCase(),
-      chunkCount: Number(payload.chunkCount) || 1,
+      transferId,
+      fileName: sanitizeIncomingFileName(payload.fileName || 'received-file'),
+      fileSize,
+      sha256,
+      chunkCount,
       chunks: [],
       receivedBytes: 0,
       nextChunkIndex: 0,
@@ -187,11 +241,27 @@ class CloudFileTransferManager {
       direction: 'received',
       state: 'waiting-approval',
     };
-    if (!transfer.transferId || !/^[a-f0-9]{64}$/.test(transfer.sha256)) {
+    const metadataInvalid =
+      !TRANSFER_ID_PATTERN.test(transfer.transferId) ||
+      !Number.isSafeInteger(transfer.fileSize) ||
+      transfer.fileSize < 0 ||
+      transfer.fileSize > MAX_MOBILE_RECEIVE_BYTES ||
+      !HASH_PATTERN.test(transfer.sha256) ||
+      !Number.isSafeInteger(transfer.chunkCount) ||
+      transfer.chunkCount < 1 ||
+      transfer.chunkCount > MAX_CHUNK_COUNT ||
+      transfer.chunkCount !== Math.max(1, Math.ceil(transfer.fileSize / CHUNK_BYTES));
+    if (
+      metadataInvalid ||
+      this.incoming.has(transfer.transferId) ||
+      this.activeTransferCount() >= MAX_ACTIVE_TRANSFERS
+    ) {
       this.sendPacket(transfer, 'error', {
         transferId: transfer.transferId,
         code: 'invalid-metadata',
-        message: 'Invalid transfer metadata.',
+        message: transfer.fileSize > MAX_MOBILE_RECEIVE_BYTES
+          ? 'File is too large for mobile receive buffering.'
+          : 'Invalid transfer metadata.',
       });
       return;
     }
@@ -224,23 +294,47 @@ class CloudFileTransferManager {
       return;
     }
     const chunk = String(payload.data || '');
+    if (!isSafeBase64(chunk)) {
+      this.cancelTransfer(transfer.transferId, 'invalid-chunk');
+      return;
+    }
+    const chunkBytes = base64ByteLength(chunk);
+    const declaredChunkSize = Number(payload.chunkSize);
+    if (
+      chunkBytes > CHUNK_BYTES ||
+      (Number.isFinite(declaredChunkSize) && declaredChunkSize !== chunkBytes) ||
+      transfer.receivedBytes + chunkBytes > transfer.fileSize ||
+      this.totalIncomingBufferedBytes() + chunkBytes > MAX_MOBILE_RECEIVE_BYTES
+    ) {
+      this.cancelTransfer(transfer.transferId, 'receive-buffer-limit');
+      return;
+    }
     const checksum = String(payload.sha256 || payload.checksum || '').toLowerCase();
+    if (!HASH_PATTERN.test(checksum)) {
+      this.cancelTransfer(transfer.transferId, 'checksum-failure');
+      return;
+    }
     const actual = await hashBase64Chunk(chunk);
     if (checksum && actual !== checksum) {
       this.cancelTransfer(transfer.transferId, 'checksum-failure');
       return;
     }
     transfer.chunks[index] = chunk;
-    transfer.receivedBytes += base64ByteLength(chunk);
+    transfer.receivedBytes += chunkBytes;
     transfer.nextChunkIndex += 1;
     transfer.state = 'downloading';
     this.refreshTimeout(transfer, 'incoming');
-    this.sendPacket(transfer, 'chunk-ack', {
+    const ackSent = this.sendPacket(transfer, 'chunk-ack', {
       transferId: transfer.transferId,
       chunkIndex: index,
       receivedBytes: this.receivedBytes(transfer),
       nextChunkIndex: transfer.nextChunkIndex,
     });
+    if (!ackSent) {
+      this.cleanupIncoming(transfer, 'relay-send-failed');
+      this.emitEvent('failed', transfer, { reason: 'relay-send-failed' });
+      return;
+    }
     this.emitEvent('progress', transfer);
   }
 
@@ -328,32 +422,52 @@ class CloudFileTransferManager {
   async sendNextChunk(transfer) {
     if (!transfer || transfer.paused) return;
     if (transfer.nextChunkIndex >= transfer.chunkCount) {
-      this.sendPacket(transfer, 'complete', {
+      const completeSent = this.sendPacket(transfer, 'complete', {
         transferId: transfer.transferId,
         fileSize: transfer.fileSize,
         sha256: transfer.sha256,
       });
+      if (!completeSent) {
+        this.cancelTransfer(transfer.transferId, 'relay-send-failed');
+        return;
+      }
       transfer.state = 'waiting-complete-ack';
       this.refreshTimeout(transfer, 'outgoing');
       this.emitEvent('progress', transfer);
       return;
     }
-    const index = transfer.nextChunkIndex;
-    const start = index * CHUNK_BASE64_LENGTH;
-    const chunk = transfer.data.slice(start, start + CHUNK_BASE64_LENGTH);
-    const checksum = await hashBase64Chunk(chunk);
-    this.sendPacket(transfer, 'chunk', {
-      transferId: transfer.transferId,
-      chunkIndex: index,
-      sequenceNumber: index,
-      chunkSize: base64ByteLength(chunk),
-      totalChunks: transfer.chunkCount,
-      data: chunk,
-      sha256: checksum,
-      checksum,
-      state: 'uploading',
-    });
-    this.refreshTimeout(transfer, 'outgoing');
+    try {
+      const index = transfer.nextChunkIndex;
+      const start = index * CHUNK_BYTES;
+      const bytesToRead = Math.min(CHUNK_BYTES, Math.max(0, transfer.fileSize - start));
+      const chunk = await readFileChunkBase64(transfer.sourceUri, start, bytesToRead);
+      if (!isSafeBase64(chunk)) {
+        throw new Error('Invalid chunk encoding.');
+      }
+      const checksum = await hashBase64Chunk(chunk);
+      const chunkSent = this.sendPacket(transfer, 'chunk', {
+        transferId: transfer.transferId,
+        chunkIndex: index,
+        sequenceNumber: index,
+        chunkSize: base64ByteLength(chunk),
+        totalChunks: transfer.chunkCount,
+        data: chunk,
+        sha256: checksum,
+        checksum,
+        state: 'uploading',
+      });
+      if (!chunkSent) {
+        this.cancelTransfer(transfer.transferId, 'relay-send-failed');
+        return;
+      }
+      this.refreshTimeout(transfer, 'outgoing');
+    } catch (error) {
+      this.cancelTransfer(transfer.transferId, 'chunk-read-failed');
+      this.emitEvent('failed', transfer, {
+        reason: 'chunk-read-failed',
+        error: error.message,
+      });
+    }
   }
 
   sendPacket(transfer, action, payload) {
@@ -372,7 +486,7 @@ class CloudFileTransferManager {
       destinationDeviceId,
       ownerId: transfer.ownerId,
       timestamp: Date.now(),
-      requestId: `${transfer.transferId}:${action}:${payload.chunkIndex ?? ''}`,
+      requestId: `${transfer.transferId}:${action}:${payload.chunkIndex ?? payload.nextChunkIndex ?? 'control'}:${createId('request')}`,
       responseId: null,
       metadata: { feature: 'cloud-file-transfer', action },
       checksum: null,
@@ -401,13 +515,13 @@ class CloudFileTransferManager {
 
   cleanupIncoming(transfer) {
     clearTimeout(transfer.timeout);
-    transfer.chunks.length = 0;
+    if (transfer.chunks) transfer.chunks.length = 0;
     this.incoming.delete(transfer.transferId);
   }
 
   cleanupOutgoing(transfer, reason) {
     clearTimeout(transfer.timeout);
-    transfer.data = null;
+    transfer.sourceUri = null;
     this.outgoing.delete(transfer.transferId);
     if (!['completed', 'rejected'].includes(reason)) transfer.reject?.(new Error(reason || 'Transfer failed.'));
   }
@@ -416,10 +530,22 @@ class CloudFileTransferManager {
     return transfer.receivedBytes || 0;
   }
 
+  activeTransferCount() {
+    return this.outgoing.size + this.incoming.size;
+  }
+
+  totalIncomingBufferedBytes() {
+    let total = 0;
+    this.incoming.forEach((transfer) => {
+      total += Number(transfer.receivedBytes) || 0;
+    });
+    return total;
+  }
+
   publicTransfer(transfer) {
     const transferredBytes = transfer.direction === 'received'
       ? this.receivedBytes(transfer)
-      : Math.min((transfer.nextChunkIndex || 0) * Math.floor(CHUNK_BASE64_LENGTH * 0.75), transfer.fileSize);
+      : Math.min((transfer.nextChunkIndex || 0) * CHUNK_BYTES, transfer.fileSize);
     return {
       transferId: transfer.transferId,
       direction: transfer.direction,
