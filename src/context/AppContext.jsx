@@ -257,6 +257,23 @@ export function AppProvider({ children }) {
     setPairedAt(data.pairedAt);
   }, []);
 
+  const ensurePairingIdentity = useCallback(async (preferredName = DEFAULT_DEVICE_NAME) => {
+    const current = pairingDataRef.current || initialPairingData;
+    const deviceId = String(current.deviceId || '').trim() || Crypto.randomUUID();
+    const deviceName = normalizeDeviceName(current.deviceName || preferredName || DEFAULT_DEVICE_NAME) || DEFAULT_DEVICE_NAME;
+    const nextPairingData = {
+      ...current,
+      deviceId,
+      deviceName,
+      paired: current.paired === true,
+      pairedAt: current.pairedAt ?? null,
+      cloudPairing: current.cloudPairing || null,
+    };
+    applyPairingData(nextPairingData);
+    await AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData));
+    return nextPairingData;
+  }, [applyPairingData]);
+
   const recordTransfer = useCallback((record) => {
     const nextHistory = [record, ...transferHistoryRef.current].slice(0, 100);
     transferHistoryRef.current = nextHistory;
@@ -1390,9 +1407,7 @@ export function AppProvider({ children }) {
     if (!normalizedName) {
       throw new Error('Device name is required.');
     }
-    if (!pairingDataRef.current.deviceId) {
-      throw new Error('Device identity is not ready.');
-    }
+    const readyPairingData = await ensurePairingIdentity(normalizedName);
 
     const normalizedRelayUrl = normalizeRelayUrl(relayUrl);
     await activateCloudMode({ cloud: { relayUrl: normalizedRelayUrl } });
@@ -1413,7 +1428,7 @@ export function AppProvider({ children }) {
     }
 
     const nextPairingData = {
-      ...pairingDataRef.current,
+      ...readyPairingData,
       deviceName: normalizedName,
       paired: true,
       pairedAt: Date.now(),
@@ -1422,7 +1437,7 @@ export function AppProvider({ children }) {
         tokenId: result.tokenId || '',
         ownerId: result.ownerId || '',
         desktopDeviceId: result.desktopDeviceId || '',
-        phoneDeviceId: result.phoneDeviceId || pairingDataRef.current.deviceId,
+        phoneDeviceId: result.phoneDeviceId || readyPairingData.deviceId,
         pair: result.pair || null,
         e2ee: result.security?.enabled === true,
         e2eeScheme: result.security?.scheme || '',
@@ -1432,7 +1447,7 @@ export function AppProvider({ children }) {
     applyPairingData(nextPairingData);
     await AsyncStorage.setItem(PAIRING_KEY, JSON.stringify(nextPairingData));
     return nextPairingData;
-  }, [activateCloudMode, applyPairingData, applySession]);
+  }, [activateCloudMode, applyPairingData, applySession, ensurePairingIdentity]);
 
   const updateDeviceName = useCallback(async (name) => {
     const normalizedName = normalizeDeviceName(name);

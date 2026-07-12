@@ -29,12 +29,14 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
   const e2eePairingSecret = typeof (payload.e2eePairingSecret || payload.s) === 'string'
     ? (payload.e2eePairingSecret || payload.s).trim()
     : '';
+  const e2eeRequired = payload.securityRequired === true || payload.sr === true;
 
   if (relayUrl || cloudPairToken || cloudVersion) {
     if (
       cloudVersion !== CLOUD_PAIR_VERSION ||
       !/^wss?:\/\/[^\s/$.?#].[^\s]*$/i.test(relayUrl) ||
       !cloudPairToken ||
+      (e2eePairingSecret && e2eePairingSecret.length < 32) ||
       !Number.isFinite(rawCloudExpiresAt) ||
       rawCloudExpiresAt <= 0
     ) {
@@ -56,6 +58,7 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
         ? {
             scheme: 'openx-e2ee-v1',
             pairingSecret: e2eePairingSecret,
+            required: e2eeRequired,
           }
         : null,
     };

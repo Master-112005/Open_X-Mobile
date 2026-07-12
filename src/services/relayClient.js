@@ -508,6 +508,9 @@ class RelayClient {
     if (!token) {
       return Promise.reject(new Error('Invalid cloud pairing QR code.'));
     }
+    if (!this.deviceIdentity.deviceId) {
+      return Promise.reject(new Error('Mobile device identity is not ready. Try scanning again.'));
+    }
     const requestId = `cloud-mobile-pair-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const startPairRequest = () => new Promise((resolve, reject) => {
       this.rejectPendingPairing(new Error('A new cloud pairing attempt was started.'));
@@ -541,8 +544,17 @@ class RelayClient {
       }
     });
 
-    const nextSettings = relayUrl ? { relayUrl } : {};
-    if (this.isConnected()) return startPairRequest();
+    const targetRelayUrl = relayUrl ? normalizeRelayUrl(relayUrl, this.settings.relayUrl) : '';
+    const nextSettings = targetRelayUrl ? { relayUrl: targetRelayUrl } : {};
+    if (this.isConnected()) {
+      const currentRelayUrl = normalizeRelayUrl(this.settings.relayUrl);
+      if (targetRelayUrl && currentRelayUrl !== targetRelayUrl) {
+        return this.disconnect('pairing-relay-switch')
+          .then(() => this.connect(nextSettings))
+          .then(startPairRequest);
+      }
+      return startPairRequest();
+    }
     return this.connect(nextSettings).then(startPairRequest);
   }
 
@@ -605,7 +617,7 @@ class RelayClient {
       }
       if (message.type === 'cloud-pair:paired') {
         const securePairing = this.resolvePairingSecurity(message);
-        if (this.pendingPairing?.pairingSecurity?.pairingSecret && !securePairing?.masterKey) {
+        if (this.pendingPairing?.pairingSecurity?.required === true && !securePairing?.masterKey) {
           this.rejectPendingPairing(new Error('Secure pairing key exchange failed.'));
           return;
         }
