@@ -87,6 +87,7 @@ export default function QRPairingScreen({ navigation, route }) {
       await pairCloudDevice({
         relayUrl: payload.relayUrl,
         pairToken: payload.pairToken,
+        security: payload.security,
         deviceName: selectedDeviceName,
       });
       showNotice({

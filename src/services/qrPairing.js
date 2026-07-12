@@ -26,6 +26,9 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
     : '';
   const cloudVersion = Number(payload.version ?? payload.v);
   const rawCloudExpiresAt = Number(payload.expiresAt ?? payload.e);
+  const e2eePairingSecret = typeof (payload.e2eePairingSecret || payload.s) === 'string'
+    ? (payload.e2eePairingSecret || payload.s).trim()
+    : '';
 
   if (relayUrl || cloudPairToken || cloudVersion) {
     if (
@@ -49,6 +52,12 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
       pairToken: cloudPairToken,
       expiresAt,
       version: CLOUD_PAIR_VERSION,
+      security: e2eePairingSecret
+        ? {
+            scheme: 'openx-e2ee-v1',
+            pairingSecret: e2eePairingSecret,
+          }
+        : null,
     };
   }
 

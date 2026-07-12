@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
+import * as SecureStore from 'expo-secure-store';
 import {
   createTransferRecord,
   loadTransferHistory,
@@ -54,6 +55,7 @@ import { CloudFileTransferManager } from '../services/cloudFileTransfer';
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const PROFILE_KEY = '@openx/profile';
+const CLOUD_E2EE_KEY = '@openx/cloud/e2ee-master-key';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Mobile';
 const DEFAULT_CONNECTION_MODE = 'cloud';
@@ -1016,6 +1018,7 @@ export function AppProvider({ children }) {
         const [
           savedSettings,
           savedPairing,
+          savedCloudE2EEKey,
           savedTransferHistory,
           savedPermissionState,
           savedSession,
@@ -1024,6 +1027,7 @@ export function AppProvider({ children }) {
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
+          SecureStore.getItemAsync(CLOUD_E2EE_KEY),
           loadTransferHistory(),
           loadPermissionState(),
           loadSession(),
@@ -1043,6 +1047,7 @@ export function AppProvider({ children }) {
         setConnectionModeState(parsedSettings.connectionMode);
         setCloudSettings(parsedSettings.cloud);
         relayClient.updateSettings(parsedSettings.cloud);
+        if (savedCloudE2EEKey) relayClient.setE2EEMasterKey(savedCloudE2EEKey);
         const nextPairingData = {
           deviceId: parsedPairing.deviceId || Crypto.randomUUID(),
           deviceName: parsedPairing.deviceName || DEFAULT_DEVICE_NAME,
@@ -1380,7 +1385,7 @@ export function AppProvider({ children }) {
     return relayClient.disconnect('manual-disconnect').then(() => nextSettings);
   }, [persistConnectionSettings]);
 
-  const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, deviceName: name }) => {
+  const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, security = null, deviceName: name }) => {
     const normalizedName = normalizeDeviceName(name || pairingDataRef.current.deviceName);
     if (!normalizedName) {
       throw new Error('Device name is required.');
@@ -1399,8 +1404,13 @@ export function AppProvider({ children }) {
     const result = await relayClient.pairWithToken({
       relayUrl: normalizedRelayUrl,
       pairToken,
+      security,
       deviceName: normalizedName,
     });
+    if (result.security?.masterKey) {
+      await SecureStore.setItemAsync(CLOUD_E2EE_KEY, result.security.masterKey);
+      relayClient.setE2EEMasterKey(result.security.masterKey);
+    }
 
     const nextPairingData = {
       ...pairingDataRef.current,
@@ -1414,6 +1424,8 @@ export function AppProvider({ children }) {
         desktopDeviceId: result.desktopDeviceId || '',
         phoneDeviceId: result.phoneDeviceId || pairingDataRef.current.deviceId,
         pair: result.pair || null,
+        e2ee: result.security?.enabled === true,
+        e2eeScheme: result.security?.scheme || '',
         pairedAt: Date.now(),
       },
     };

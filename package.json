@@ -25,6 +25,7 @@
     "expo-linear-gradient": "~56.0.4",
     "expo-network": "~56.0.5",
     "expo-notifications": "~56.0.20",
+    "expo-secure-store": "~56.0.4",
     "expo-sharing": "~56.0.21",
     "expo-status-bar": "~56.0.4",
     "node-forge": "^1.4.0",

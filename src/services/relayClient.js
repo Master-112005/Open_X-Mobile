@@ -1,5 +1,6 @@
 import packageJson from '../../package.json';
 import * as Network from 'expo-network';
+import { SecurePacketChannel, decryptJson } from './e2ee';
 
 const CONNECTION_STATES = new Set([
   'disconnected',
@@ -107,6 +108,7 @@ class RelayClient {
   presence = [];
   notifications = [];
   auth = null;
+  secureChannel = new SecurePacketChannel();
   reliability = {
     state: 'offline',
     reconnectCount: 0,
@@ -375,6 +377,7 @@ class RelayClient {
       reliability: this.getReliabilityStatus(),
       network: { ...this.networkStatus },
       authenticated: Boolean(this.auth?.accessToken),
+      security: this.secureChannel.getStatus(),
       friendlyMessage: this.friendlyMessage,
       settings: { ...this.settings },
       ...extra,
@@ -396,9 +399,10 @@ class RelayClient {
   }
 
   sendRelayPacket(packet) {
+    const protectedPacket = this.protectRelayPacket(packet);
     const sent = this.send({
       type: 'relay:packet',
-      packet,
+      packet: protectedPacket,
     });
     if (!sent && packet?.metadata?.retryable === true) {
       this.reliability.retryCount += 1;
@@ -499,7 +503,7 @@ class RelayClient {
     });
   }
 
-  pairWithToken({ relayUrl, pairToken, deviceName, deviceType = 'phone', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
+  pairWithToken({ relayUrl, pairToken, security = null, deviceName, deviceType = 'phone', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
     const token = String(pairToken || '').trim();
     if (!token) {
       return Promise.reject(new Error('Invalid cloud pairing QR code.'));
@@ -510,7 +514,13 @@ class RelayClient {
       const timer = setTimeout(() => {
         this.rejectPendingPairing(new Error('Cloud pairing request timed out.'));
       }, Math.max(30000, Math.min(900000, Number(timeoutMs) || DEFAULT_PAIR_TIMEOUT_MS)));
-      this.pendingPairing = { requestId, resolve, reject, timer };
+      this.pendingPairing = {
+        requestId,
+        resolve,
+        reject,
+        timer,
+        pairingSecurity: security && typeof security === 'object' ? security : null,
+      };
       const sent = this.send({
         type: 'cloud-pair:request',
         requestId,
@@ -594,7 +604,13 @@ class RelayClient {
         return;
       }
       if (message.type === 'cloud-pair:paired') {
+        const securePairing = this.resolvePairingSecurity(message);
+        if (this.pendingPairing?.pairingSecurity?.pairingSecret && !securePairing?.masterKey) {
+          this.rejectPendingPairing(new Error('Secure pairing key exchange failed.'));
+          return;
+        }
         this.auth = message.auth || this.auth;
+        if (securePairing?.masterKey) this.setE2EEMasterKey(securePairing.masterKey);
         this.resolvePendingPairing({
           paired: true,
           message: message.message || 'Paired Successfully',
@@ -606,6 +622,7 @@ class RelayClient {
           pair: message.pair || null,
           devices: message.devices || [],
           device: message.device || null,
+          security: securePairing,
         });
         return;
       }
@@ -623,7 +640,12 @@ class RelayClient {
         message.type === 'relay:error'
       ) {
         if (message.type === 'relay:ack') this.reliability.state = 'healthy';
-        this.emitRelayMessage(message);
+        if (message.type === 'relay:packet') {
+          const decrypted = this.unprotectRelayMessage(message);
+          if (decrypted) this.emitRelayMessage(decrypted);
+        } else {
+          this.emitRelayMessage(message);
+        }
         return;
       }
       if (message.type === 'auth:refreshed') {
@@ -694,6 +716,63 @@ class RelayClient {
         listener(message);
       } catch {}
     });
+  }
+
+  setE2EEMasterKey(masterKey) {
+    const applied = this.secureChannel.setMasterKey(masterKey);
+    this.emitStatus();
+    return applied;
+  }
+
+  protectRelayPacket(packet) {
+    try {
+      return this.secureChannel.encryptPacket(packet);
+    } catch {
+      return packet;
+    }
+  }
+
+  unprotectRelayMessage(message) {
+    try {
+      const packet = this.secureChannel.decryptPacket(message.packet || {});
+      return { ...message, packet };
+    } catch {
+      return {
+        type: 'relay:error',
+        code: 'e2ee-packet-rejected',
+        packetId: message?.packet?.packetId || null,
+        requestId: message?.packet?.requestId || null,
+        message: 'Encrypted packet could not be authenticated.',
+      };
+    }
+  }
+
+  resolvePairingSecurity(message = {}) {
+    const pending = this.pendingPairing;
+    const pairingSecret = String(pending?.pairingSecurity?.pairingSecret || '').trim();
+    const encryptedMasterKey = message.security?.encryptedMasterKey;
+    if (!pairingSecret || !encryptedMasterKey) return null;
+    try {
+      const decrypted = decryptJson(pairingSecret, encryptedMasterKey, {
+        domain: 'pairing-master-key',
+        context: {
+          pairRequestId: message.pairRequestId || '',
+          tokenId: message.tokenId || '',
+        },
+        aad: {
+          pairRequestId: message.pairRequestId || '',
+          tokenId: message.tokenId || '',
+        },
+      });
+      return {
+        scheme: 'openx-e2ee-v1',
+        enabled: true,
+        masterKey: String(decrypted?.masterKey || '').trim(),
+        createdAt: decrypted?.createdAt || Date.now(),
+      };
+    } catch {
+      return null;
+    }
   }
 
   upsertPresence(presence) {
