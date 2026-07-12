@@ -1,4 +1,4 @@
-import appConfig from '../../app.json';
+import packageJson from '../../package.json';
 import * as Network from 'expo-network';
 
 const CONNECTION_STATES = new Set([
@@ -16,7 +16,10 @@ const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 30000];
-export const MOBILE_APP_VERSION = String(appConfig?.expo?.version || '1.0.0');
+export const MOBILE_APP_VERSION = String(packageJson?.version || '1.0.0');
+
+const createRequestId = (prefix) =>
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 const clampNumber = (value, min, max, fallback) => {
   const number = Number(value);
@@ -432,21 +435,21 @@ class RelayClient {
     return this.send({
       ...payload,
       type: 'notification:create',
-      requestId: payload.requestId || `mobile-notification-create-${Date.now()}`,
+      requestId: payload.requestId || createRequestId('mobile-notification-create'),
     });
   }
 
   requestNotificationList() {
     return this.send({
       type: 'notification:list',
-      requestId: `mobile-notification-list-${Date.now()}`,
+      requestId: createRequestId('mobile-notification-list'),
     });
   }
 
   markNotificationRead(notificationId) {
     return this.send({
       type: 'notification:read',
-      requestId: `mobile-notification-read-${Date.now()}`,
+      requestId: createRequestId('mobile-notification-read'),
       notificationId,
     });
   }
@@ -454,7 +457,7 @@ class RelayClient {
   dismissNotification(notificationId) {
     return this.send({
       type: 'notification:dismiss',
-      requestId: `mobile-notification-dismiss-${Date.now()}`,
+      requestId: createRequestId('mobile-notification-dismiss'),
       notificationId,
     });
   }
@@ -462,7 +465,7 @@ class RelayClient {
   clearNotifications() {
     return this.send({
       type: 'notification:clear',
-      requestId: `mobile-notification-clear-${Date.now()}`,
+      requestId: createRequestId('mobile-notification-clear'),
     });
   }
 

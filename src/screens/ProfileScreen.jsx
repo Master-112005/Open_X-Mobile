@@ -1,12 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import appConfig from '../../app.json';
+import packageJson from '../../package.json';
 import {
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
+import { useEffect, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
@@ -42,15 +44,36 @@ export default function ProfileScreen({ navigation }) {
     connectionStatus,
     deviceId,
     deviceName,
+    openXProfile,
     paired,
     pairedAt,
+    saveOpenXProfile,
     sessionValid,
   } = useApp();
+  const [draftProfile, setDraftProfile] = useState(openXProfile || {});
+  const [savingProfile, setSavingProfile] = useState(false);
   const insets = useSafeAreaInsets();
   const isCloud = connectionMode === 'cloud';
   const status = isCloud ? cloudStatus?.state : connectionStatus;
   const connected = isCloud ? cloudStatus?.connected === true : connectionStatus === 'connected';
-  const version = appConfig?.expo?.version || '1.0.0';
+  const version = packageJson?.version || '1.0.0';
+
+  useEffect(() => {
+    setDraftProfile(openXProfile || {});
+  }, [openXProfile]);
+
+  const updateProfileField = (field, value) => {
+    setDraftProfile((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleSaveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      await saveOpenXProfile(draftProfile);
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   return (
     <View style={styles.screen}>
@@ -86,6 +109,43 @@ export default function ProfileScreen({ navigation }) {
           <InfoRow label="Device ID" value={deviceId} />
           <InfoRow label="App Version" value={version} />
           <InfoRow label="Platform" value="Mobile" />
+        </GlassPanel>
+
+        <Text style={styles.sectionTitle}>OpenX Profile</Text>
+        <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+          {[
+            ['fullName', 'Full Name'],
+            ['email', 'Email'],
+            ['phone', 'Phone'],
+            ['company', 'Company'],
+            ['role', 'Role'],
+            ['country', 'Country'],
+            ['addressLine1', 'Address'],
+            ['city', 'City'],
+            ['state', 'State'],
+            ['postalCode', 'Postal Code'],
+          ].map(([field, label]) => (
+            <View key={field} style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>{label}</Text>
+              <TextInput
+                autoCapitalize={field === 'email' ? 'none' : 'words'}
+                keyboardType={field === 'email' ? 'email-address' : field === 'phone' ? 'phone-pad' : 'default'}
+                onChangeText={(value) => updateProfileField(field, value)}
+                placeholder="--"
+                placeholderTextColor={colors.textMuted}
+                style={styles.input}
+                value={draftProfile?.[field] || ''}
+              />
+            </View>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            disabled={savingProfile}
+            onPress={handleSaveProfile}
+            style={({ pressed }) => [styles.saveButton, pressed && styles.pressed, savingProfile && styles.disabled]}
+          >
+            <Text style={styles.saveButtonText}>{savingProfile ? 'Saving...' : 'Save Profile'}</Text>
+          </Pressable>
         </GlassPanel>
 
         <Text style={styles.sectionTitle}>Connection</Text>
@@ -218,6 +278,44 @@ const styles = StyleSheet.create({
   },
   cardContent: {
     padding: spacing.lg,
+  },
+  inputGroup: {
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  inputLabel: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  input: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+    minHeight: 46,
+    paddingHorizontal: spacing.md,
+  },
+  saveButton: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.borderBright,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    justifyContent: 'center',
+    marginTop: spacing.xs,
+    minHeight: 46,
+  },
+  saveButtonText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  disabled: {
+    opacity: 0.62,
   },
   infoRow: {
     alignItems: 'center',

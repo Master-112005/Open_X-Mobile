@@ -53,6 +53,7 @@ import { CloudFileTransferManager } from '../services/cloudFileTransfer';
 
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
+const PROFILE_KEY = '@openx/profile';
 const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Mobile';
 const DEFAULT_CONNECTION_MODE = 'cloud';
@@ -60,6 +61,8 @@ const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
 const MAX_PENDING_MOBILE_NOTIFICATIONS = 20;
+const MOBILE_NOTIFICATION_DEDUPE_MS = 2500;
+const MAX_RECENT_MOBILE_NOTIFICATION_KEYS = 80;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -130,21 +133,54 @@ const normalizeDeviceName = (value) =>
     .trim()
     .slice(0, 100);
 
+const PROFILE_FIELDS = [
+  'fullName',
+  'email',
+  'phone',
+  'addressLine1',
+  'city',
+  'state',
+  'postalCode',
+  'country',
+  'company',
+  'role',
+];
+
+const EMPTY_PROFILE = Object.freeze(Object.fromEntries(PROFILE_FIELDS.map((field) => [field, ''])));
+
+const normalizeOpenXProfile = (profile = {}) => {
+  const source = profile && typeof profile === 'object' ? profile : {};
+  return Object.fromEntries(PROFILE_FIELDS.map((field) => [
+    field,
+    String(source[field] || '').replace(/\s+/g, ' ').trim().slice(0, field === 'addressLine1' ? 180 : 120),
+  ]));
+};
+
 const normalizeMobileNotification = (notification = {}) => {
   const now = Date.now();
   const appName = String(notification.appName || notification.packageName || 'Mobile').replace(/\s+/g, ' ').trim().slice(0, 80);
   const title = String(notification.title || appName || 'Notification').replace(/\s+/g, ' ').trim().slice(0, 140);
   const message = String(notification.message || notification.text || notification.body || '').replace(/\s+/g, ' ').trim().slice(0, 360);
   if (!title && !message) return null;
+  const packageName = String(notification.packageName || '').trim().slice(0, 120);
+  const notificationId = String(notification.notificationId || notification.id || `mobile_notification_${now}_${Math.random().toString(36).slice(2, 8)}`);
+  const notificationKey = [
+    packageName || appName,
+    title,
+    message,
+  ].join('|').toLowerCase();
   return {
-    notificationId: String(notification.notificationId || notification.id || `mobile_notification_${now}_${Math.random().toString(36).slice(2, 8)}`),
+    notificationId,
     appName,
-    packageName: String(notification.packageName || '').trim().slice(0, 120),
+    packageName,
     title,
     message,
     priority: String(notification.priority || 'normal').toLowerCase(),
     category: String(notification.category || 'phone').toLowerCase(),
     timestamp: Number(notification.timestamp) || now,
+    notificationKey,
+    dedupeKey: String(notification.notificationId || notification.id || notificationKey),
+    groupKey: String(notification.groupKey || packageName || appName || 'mobile').replace(/\s+/g, ' ').trim().slice(0, 120).toLowerCase(),
   };
 };
 
@@ -163,6 +199,7 @@ export function AppProvider({ children }) {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [deviceId, setDeviceId] = useState('');
   const [deviceName, setDeviceName] = useState(DEFAULT_DEVICE_NAME);
+  const [openXProfile, setOpenXProfile] = useState(EMPTY_PROFILE);
   const [paired, setPaired] = useState(false);
   const [pairedAt, setPairedAt] = useState(null);
   const [pairingLoaded, setPairingLoaded] = useState(false);
@@ -188,9 +225,11 @@ export function AppProvider({ children }) {
   const scheduleItemsRef = useRef([]);
   const scheduleNotificationIdsRef = useRef(new Map());
   const pendingMobileNotificationsRef = useRef([]);
+  const recentMobileNotificationKeysRef = useRef(new Map());
   const notificationPermissionRef = useRef(null);
   const sessionRef = useRef(EMPTY_SESSION);
   const settingsRef = useRef(normalizeConnectionSettings({}));
+  const openXProfileRef = useRef(EMPTY_PROFILE);
 
   const showNotice = useCallback((nextNotice) => {
     const normalized = typeof nextNotice === 'string'
@@ -257,6 +296,18 @@ export function AppProvider({ children }) {
     const items = schedulesFromSnapshot(snapshot);
     return applyScheduleItems(items, snapshot?.generatedAt || new Date().toISOString());
   }, [applyScheduleItems]);
+
+  const applyOpenXProfile = useCallback((profile, persist = true) => {
+    const normalized = normalizeOpenXProfile(profile);
+    openXProfileRef.current = normalized;
+    setOpenXProfile(normalized);
+    if (persist) {
+      AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(normalized)).catch(() => {
+        console.warn('Unable to persist OpenX profile.');
+      });
+    }
+    return normalized;
+  }, []);
 
   const persistConnectionSettings = useCallback(async (updates = {}) => {
     const nextSettings = normalizeConnectionSettings({
@@ -331,6 +382,44 @@ export function AppProvider({ children }) {
         action,
         schedule,
         deviceName: pairingDataRef.current.deviceName,
+        metadata: { client: 'openx-mobile' },
+      },
+    });
+  }, []);
+
+  const sendCloudProfileSync = useCallback((action = 'request', profile = null) => {
+    const cloudPairing = pairingDataRef.current.cloudPairing || {};
+    if (
+      settingsRef.current.connectionMode !== 'cloud' ||
+      !relayClient.isConnected() ||
+      !pairingDataRef.current.paired ||
+      !cloudPairing.ownerId ||
+      !cloudPairing.desktopDeviceId ||
+      !pairingDataRef.current.deviceId
+    ) {
+      return false;
+    }
+    const requestId = Crypto.randomUUID();
+    return relayClient.sendRelayPacket({
+      packetId: `cloud_profile_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      protocolVersion: 1,
+      packetType: 'request',
+      sourceDeviceId: cloudPairing.phoneDeviceId || pairingDataRef.current.deviceId,
+      destinationDeviceId: cloudPairing.desktopDeviceId,
+      ownerId: cloudPairing.ownerId,
+      timestamp: Date.now(),
+      requestId,
+      responseId: null,
+      metadata: {
+        feature: 'profile-sync',
+        deviceName: pairingDataRef.current.deviceName,
+      },
+      checksum: null,
+      encryption: null,
+      payload: {
+        type: 'profile-sync',
+        action,
+        profile: profile ? normalizeOpenXProfile(profile) : undefined,
         metadata: { client: 'openx-mobile' },
       },
     });
@@ -626,6 +715,11 @@ export function AppProvider({ children }) {
       if (packet.payload?.type === 'cloud-file-transfer') return;
       if (packet.payload?.type === 'schedule-sync') {
         if (packet.payload?.snapshot) applyScheduleSnapshot(packet.payload.snapshot);
+        return;
+      }
+      if (packet.payload?.type === 'profile-sync') {
+        const profile = packet.payload?.snapshot?.profile || packet.payload?.profile;
+        if (profile) applyOpenXProfile(profile);
         return;
       }
       const response = normalizeCloudAssistantPacket(packet);
@@ -926,6 +1020,7 @@ export function AppProvider({ children }) {
           savedPermissionState,
           savedSession,
           savedSchedules,
+          savedProfile,
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
@@ -933,6 +1028,7 @@ export function AppProvider({ children }) {
           loadPermissionState(),
           loadSession(),
           loadSchedules(),
+          AsyncStorage.getItem(PROFILE_KEY),
         ]);
         if (!mounted) return;
 
@@ -962,6 +1058,7 @@ export function AppProvider({ children }) {
         setTransferHistory(savedTransferHistory);
         scheduleItemsRef.current = savedSchedules;
         setScheduleItems(savedSchedules);
+        applyOpenXProfile(parseStoredObject(savedProfile), false);
         applyPermissionState(savedPermissionState);
         applySession(savedSession);
         await AsyncStorage.setItem(
@@ -1014,6 +1111,7 @@ export function AppProvider({ children }) {
     };
   }, [
     applyPairingData,
+    applyOpenXProfile,
     applyPermissionState,
     applyScheduleSnapshot,
     applySession,
@@ -1061,7 +1159,10 @@ export function AppProvider({ children }) {
   useEffect(() => {
     if (!settingsLoaded || !pairingLoaded || !paired) return;
     if (connectionMode === 'cloud') {
-      if (cloudStatus?.connected) requestScheduleSync();
+      if (cloudStatus?.connected) {
+        requestScheduleSync();
+        sendCloudProfileSync('request');
+      }
       return;
     }
     if (sessionLoaded && sessionValid && connectionStatus === 'connected') {
@@ -1074,6 +1175,7 @@ export function AppProvider({ children }) {
     paired,
     pairingLoaded,
     requestScheduleSync,
+    sendCloudProfileSync,
     sessionLoaded,
     sessionValid,
     settingsLoaded,
@@ -1351,6 +1453,14 @@ export function AppProvider({ children }) {
     return nextPairing;
   }, [applyPairingData]);
 
+  const saveOpenXProfile = useCallback(async (profile) => {
+    const normalized = applyOpenXProfile(profile);
+    if (settingsRef.current.connectionMode === 'cloud') {
+      sendCloudProfileSync('upsert', normalized);
+    }
+    return normalized;
+  }, [applyOpenXProfile, sendCloudProfileSync]);
+
   const upsertScheduleItem = useCallback(async (schedule) => {
     const normalized = normalizeScheduleItem({
       ...schedule,
@@ -1448,6 +1558,8 @@ export function AppProvider({ children }) {
           packageName: normalized.packageName,
           deviceName: pairingDataRef.current.deviceName,
           timestamp: normalized.timestamp,
+          groupKey: normalized.groupKey,
+          notificationKey: normalized.notificationKey,
         },
         ttlMs: 5 * 60 * 1000,
       });
@@ -1483,6 +1595,17 @@ export function AppProvider({ children }) {
   const sendMobileNotification = useCallback((notification) => {
     const normalized = normalizeMobileNotification(notification);
     if (!normalized || !pairingDataRef.current.paired) return false;
+    const now = Date.now();
+    const recentKeys = recentMobileNotificationKeysRef.current;
+    for (const [key, timestamp] of recentKeys) {
+      if (now - timestamp > MOBILE_NOTIFICATION_DEDUPE_MS) recentKeys.delete(key);
+    }
+    if (recentKeys.has(normalized.dedupeKey)) return true;
+    recentKeys.set(normalized.dedupeKey, now);
+    if (recentKeys.size > MAX_RECENT_MOBILE_NOTIFICATION_KEYS) {
+      const oldestKey = recentKeys.keys().next().value;
+      if (oldestKey) recentKeys.delete(oldestKey);
+    }
     if (forwardMobileNotificationNow(normalized)) return true;
 
     pendingMobileNotificationsRef.current = [
@@ -1652,6 +1775,7 @@ export function AppProvider({ children }) {
       settingsLoaded,
       deviceId,
       deviceName,
+      openXProfile,
       paired,
       pairedAt,
       pairingLoaded,
@@ -1669,6 +1793,7 @@ export function AppProvider({ children }) {
       sendMessage,
       pairCloudDevice,
       updateDeviceName,
+      saveOpenXProfile,
       upsertScheduleItem,
       removeScheduleItem,
       requestScheduleSync,
@@ -1698,6 +1823,7 @@ export function AppProvider({ children }) {
       settingsLoaded,
       deviceId,
       deviceName,
+      openXProfile,
       paired,
       pairedAt,
       pairingLoaded,
@@ -1715,6 +1841,7 @@ export function AppProvider({ children }) {
       sendMessage,
       pairCloudDevice,
       updateDeviceName,
+      saveOpenXProfile,
       upsertScheduleItem,
       removeScheduleItem,
       requestScheduleSync,
