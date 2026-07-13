@@ -1,6 +1,6 @@
 import packageJson from '../../package.json';
 import * as Network from 'expo-network';
-import { SecurePacketChannel, decryptJson } from './e2ee';
+import { SecurePacketChannel, decryptJson, encryptJson } from './e2ee';
 
 const CONNECTION_STATES = new Set([
   'disconnected',
@@ -120,6 +120,8 @@ class RelayClient {
   };
   deviceIdentity = {
     deviceId: '',
+    ownerId: '',
+    pairedWithDeviceId: '',
     deviceName: 'OpenX Mobile',
     deviceType: 'phone',
     platform: 'mobile',
@@ -442,11 +444,59 @@ class RelayClient {
   }
 
   createNotification(payload = {}) {
+    const protectedPayload = this.protectNotificationPayload(payload);
     return this.send({
-      ...payload,
+      ...protectedPayload,
       type: 'notification:create',
       requestId: payload.requestId || createRequestId('mobile-notification-create'),
     });
+  }
+
+  protectNotificationPayload(payload = {}) {
+    if (!this.secureChannel.hasKey()) return payload;
+    const notificationId = String(payload.notificationId || '').trim();
+    const destinationDeviceId = String(payload.destinationDeviceId || '').trim();
+    const sourceDeviceId = String(this.device?.deviceId || this.deviceIdentity.deviceId || '').trim();
+    const ownerId = String(this.device?.ownerId || this.owner?.id || this.deviceIdentity.ownerId || '').trim();
+    if (!notificationId || !destinationDeviceId || !sourceDeviceId || !ownerId) return payload;
+    try {
+      const details = payload.details && typeof payload.details === 'object' ? payload.details : {};
+      const content = {
+        appName: details.appName || payload.appName || '',
+        packageName: details.packageName || payload.packageName || '',
+        title: payload.title || '',
+        message: payload.message || '',
+        details,
+        category: payload.category || 'phone',
+        priority: payload.priority || 'normal',
+        timestamp: details.timestamp || payload.timestamp || Date.now(),
+        repeatCount: details.repeatCount || payload.repeatCount || 1,
+      };
+      const envelope = encryptJson(this.secureChannel.masterKey, content, {
+        domain: 'phone-notification',
+        context: { ownerId, sourceDeviceId, destinationDeviceId, notificationId },
+        aad: { ownerId, sourceDeviceId, destinationDeviceId, notificationId },
+      });
+      return {
+        ...payload,
+        title: 'Encrypted phone notification',
+        message: 'OpenX protected this notification.',
+        details: {
+          encrypted: true,
+          source: 'openx-mobile',
+          deviceName: details.deviceName || this.deviceIdentity.deviceName || 'OpenX Mobile',
+          timestamp: content.timestamp,
+          repeatCount: content.repeatCount,
+        },
+        encryptedContent: {
+          encrypted: true,
+          scheme: envelope.scheme,
+          envelope,
+        },
+      };
+    } catch {
+      return payload;
+    }
   }
 
   requestNotificationList() {
@@ -483,6 +533,8 @@ class RelayClient {
     this.deviceIdentity = {
       ...this.deviceIdentity,
       deviceId: String(identity.deviceId || this.deviceIdentity.deviceId || '').trim(),
+      ownerId: String(identity.ownerId || this.deviceIdentity.ownerId || '').trim(),
+      pairedWithDeviceId: String(identity.pairedWithDeviceId || this.deviceIdentity.pairedWithDeviceId || '').trim(),
       deviceName: String(identity.deviceName || this.deviceIdentity.deviceName || 'OpenX Mobile').trim(),
       deviceType: String(identity.deviceType || this.deviceIdentity.deviceType || 'phone').trim(),
       platform: String(identity.platform || this.deviceIdentity.platform || 'mobile').trim(),
@@ -497,6 +549,7 @@ class RelayClient {
       type: 'device:register',
       requestId: `mobile-device-${Date.now()}`,
       deviceId: this.deviceIdentity.deviceId,
+      ownerId: this.deviceIdentity.ownerId || undefined,
       deviceType: this.deviceIdentity.deviceType,
       friendlyName: this.deviceIdentity.deviceName,
       platform: this.deviceIdentity.platform,
@@ -505,6 +558,7 @@ class RelayClient {
       capabilities: {
         cloudPairing: true,
         localFirst: true,
+        pairedWithDeviceId: this.deviceIdentity.pairedWithDeviceId || '',
       },
     });
   }

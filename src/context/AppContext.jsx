@@ -25,6 +25,7 @@ import {
 } from '../services/scheduleStore';
 import {
   formatScheduleDue,
+  nextScheduleDueForRecurrence,
   parseMobileScheduleCommand,
 } from '../services/mobileScheduleIntelligence';
 import {
@@ -72,6 +73,8 @@ const MAX_PENDING_MOBILE_NOTIFICATIONS = 50;
 const MOBILE_NOTIFICATION_BURST_WINDOW_MS = 450;
 const MOBILE_NOTIFICATION_DEDUPE_MS = 2500;
 const MAX_RECENT_MOBILE_NOTIFICATION_KEYS = 160;
+const isCloudFileTransferRequestId = (value) =>
+  /^cloud_(?:mobile_)?transfer_[A-Za-z0-9._:-]+:/i.test(String(value || '').trim());
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -286,8 +289,11 @@ export function AppProvider({ children }) {
 
   const applyPairingData = useCallback((data) => {
     pairingDataRef.current = data;
+    const cloudPairing = data.cloudPairing || {};
     relayClient.setDeviceIdentity({
       deviceId: data.deviceId,
+      ownerId: cloudPairing.ownerId || '',
+      pairedWithDeviceId: cloudPairing.desktopDeviceId || '',
       deviceName: data.deviceName,
       deviceType: 'phone',
       platform: Platform.OS || 'mobile',
@@ -800,6 +806,7 @@ export function AppProvider({ children }) {
       if (message.type === 'relay:error') {
         const requestId = message.requestId || '';
         if (requestId) clearCloudRequest(requestId);
+        if (isCloudFileTransferRequestId(requestId)) return;
         setMessages((current) => [
           ...current,
           createMessage('assistant', message.message || 'Cloud command failed.'),
@@ -1331,7 +1338,13 @@ export function AppProvider({ children }) {
       const updated = scheduleItemsRef.current.map((item) => {
         const dueMs = new Date(item.dueAt).getTime();
         if (String(item.status || '').toLowerCase() === 'scheduled' && Number.isFinite(dueMs) && dueMs <= Date.now()) {
-          const dueItem = { ...item, status: 'due', updatedAt: new Date().toISOString() };
+          const recurrence = String(item.recurrence || item.metadata?.recurrence || '').trim();
+          const nextDue = recurrence
+            ? nextScheduleDueForRecurrence(recurrence, item.dueAt)
+            : null;
+          const dueItem = recurrence && nextDue && Number.isFinite(nextDue.getTime())
+            ? { ...item, recurrence, dueAt: nextDue.toISOString(), status: 'scheduled', updatedAt: new Date().toISOString() }
+            : { ...item, status: 'due', updatedAt: new Date().toISOString() };
           dueNow.push(dueItem);
           return dueItem;
         }
@@ -1711,6 +1724,7 @@ export function AppProvider({ children }) {
     if (settingsRef.current.connectionMode === 'cloud') {
       const cloudPairing = pairingDataRef.current.cloudPairing || {};
       if (!relayClient.isConnected() || !cloudPairing.desktopDeviceId) return false;
+      if (cloudPairing.e2ee === true && relayClient.getStatus()?.security?.enabled !== true) return false;
       return relayClient.createNotification({
         destinationDeviceId: cloudPairing.desktopDeviceId,
         notificationId: normalized.notificationId,

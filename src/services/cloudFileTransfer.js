@@ -184,6 +184,7 @@ class CloudFileTransferManager {
   }
 
   handleRelayMessage(message) {
+    if (message.type === 'relay:error') return this.handleRelayError(message);
     if (message.type !== 'relay:packet') return;
     const packet = message.packet || {};
     const payload = packet.payload || {};
@@ -219,6 +220,22 @@ class CloudFileTransferManager {
     if (action === 'cancel') return this.handleCancel(payload);
     if (action === 'pause') return this.handlePause(payload);
     if (action === 'resume') return this.handleResume(payload);
+  }
+
+  handleRelayError(message) {
+    const requestId = String(message?.requestId || '').trim();
+    const transferId = requestId.split(':')[0] || '';
+    if (!transferId) return false;
+    const transfer = this.outgoing.get(transferId) || this.incoming.get(transferId);
+    if (!transfer) return false;
+    const reason = String(message?.code || 'relay-error');
+    if (this.outgoing.has(transferId)) this.cleanupOutgoing(transfer, reason);
+    else this.cleanupIncoming(transfer, reason);
+    this.emitEvent('failed', transfer, {
+      reason,
+      error: message?.message || 'Cloud relay could not route the file transfer.',
+    });
+    return true;
   }
 
   handleMetadata(packet, payload) {
