@@ -88,6 +88,7 @@ export default function QRPairingScreen({ navigation, route }) {
         relayUrl: payload.relayUrl,
         pairToken: payload.pairToken,
         security: payload.security,
+        blockchain: payload.blockchain,
         deviceName: selectedDeviceName,
       });
       showNotice({

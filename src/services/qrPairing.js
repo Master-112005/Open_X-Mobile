@@ -30,6 +30,11 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
     ? (payload.e2eePairingSecret || payload.s).trim()
     : '';
   const e2eeRequired = payload.securityRequired === true || payload.sr === true;
+  const blockchain = payload.blockchain && typeof payload.blockchain === 'object'
+    ? payload.blockchain
+    : payload.b && typeof payload.b === 'object'
+      ? payload.b
+      : null;
 
   if (relayUrl || cloudPairToken || cloudVersion) {
     if (
@@ -54,6 +59,22 @@ export function parsePairingQrPayload(rawPayload, now = Date.now()) {
       pairToken: cloudPairToken,
       expiresAt,
       version: CLOUD_PAIR_VERSION,
+      blockchain: blockchain
+        ? {
+            pairVersion: String(blockchain.pv || blockchain.pairVersion || ''),
+            pairId: String(blockchain.pid || blockchain.pairId || ''),
+            pairHash: String(blockchain.ph || blockchain.pairHash || ''),
+            desktopDeviceId: String(blockchain.dd || blockchain.desktopDeviceId || ''),
+            desktopWallet: String(blockchain.dw || blockchain.desktopWallet || ''),
+            nonce: String(blockchain.n || blockchain.nonce || ''),
+            createdAt: Number(blockchain.ca || blockchain.createdAt || 0),
+            expiresAt: Number(blockchain.e || blockchain.expiresAt || expiresAt),
+            network: String(blockchain.bn || blockchain.network || ''),
+            chainId: Number(blockchain.cid || blockchain.chainId || 0),
+            pairRegistryAddress: String(blockchain.pr || blockchain.pairRegistryAddress || ''),
+            pairToken: cloudPairToken,
+          }
+        : null,
       security: e2eePairingSecret
         ? {
             scheme: 'openx-e2ee-v1',

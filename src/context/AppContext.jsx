@@ -12,6 +12,9 @@ import {
 } from '../services/fileTransfer';
 import {
   DEFAULT_PERMISSIONS,
+  cachePermissionRecord,
+  checkCachedPermission as checkBlockchainPermission,
+  loadBlockchainPermissionCache,
   loadPermissionState,
   normalizePermissions,
   persistPermissionState,
@@ -57,6 +60,7 @@ import {
 } from '../services/relayClient';
 import { CloudFileTransferManager } from '../services/cloudFileTransfer';
 import { subscribeToNativeNotifications } from '../services/nativeNotificationBridge';
+import { blockchainIdentityService } from '../services/blockchainIdentity';
 
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
@@ -261,6 +265,7 @@ export function AppProvider({ children }) {
   const [sessionValid, setSessionValid] = useState(false);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState(null);
+  const [blockchainIdentity, setBlockchainIdentity] = useState(blockchainIdentityService.getStatus());
   const pairingDataRef = useRef(initialPairingData);
   const pendingPairingRef = useRef(null);
   const pendingCloudRequestsRef = useRef(new Map());
@@ -750,6 +755,10 @@ export function AppProvider({ children }) {
       if (mounted) setCloudPresence(presence);
     });
 
+    const unsubscribeBlockchainIdentity = blockchainIdentityService.subscribe(() => {
+      if (mounted) setBlockchainIdentity(blockchainIdentityService.getStatus());
+    });
+
     const unsubscribeCloudNotifications = relayClient.subscribeToNotifications((notifications) => {
       if (mounted) setCloudNotifications(notifications);
     });
@@ -1023,7 +1032,13 @@ export function AppProvider({ children }) {
             return;
           }
 
-          if (!permissionsRef.current.fileTransfer) {
+          const receivePermission = checkBlockchainPermission({
+            deviceId: pairingDataRef.current.deviceId,
+            permissionName: 'fileTransfer',
+            operation: 'mobile-receive-file',
+            localPermissions: permissionsRef.current,
+          });
+          if (!receivePermission.allowed) {
             const errorMessage = 'File transfers disabled by desktop.';
             sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
@@ -1043,7 +1058,13 @@ export function AppProvider({ children }) {
             return;
           }
 
-          if (!permissionsRef.current.receiveFiles) {
+          const receiveFilesPermission = checkBlockchainPermission({
+            deviceId: pairingDataRef.current.deviceId,
+            permissionName: 'receiveFiles',
+            operation: 'mobile-receive-file',
+            localPermissions: permissionsRef.current,
+          });
+          if (!receiveFilesPermission.allowed) {
             const errorMessage = 'Receiving files disabled by desktop.';
             sendReceipt({ success: false, error: errorMessage });
             recordTransfer(
@@ -1126,6 +1147,7 @@ export function AppProvider({ children }) {
           savedSchedules,
           savedProfile,
           savedDirtySchedules,
+          savedBlockchainPermissionCache,
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
@@ -1136,7 +1158,9 @@ export function AppProvider({ children }) {
           loadSchedules(),
           AsyncStorage.getItem(PROFILE_KEY),
           AsyncStorage.getItem(DIRTY_SCHEDULES_KEY),
+          loadBlockchainPermissionCache(),
         ]);
+        void savedBlockchainPermissionCache;
         if (!mounted) return;
 
         const parsedSettings = normalizeConnectionSettings(
@@ -1162,6 +1186,13 @@ export function AppProvider({ children }) {
         setDesktopAddress(savedAddress);
         setDesktopPort(savedPort);
         applyPairingData(nextPairingData);
+        blockchainIdentityService.initialize()
+          .then((status) => {
+            if (mounted) setBlockchainIdentity(status);
+          })
+          .catch((error) => {
+            console.warn('Blockchain identity initialization failed safely.', error?.message || error);
+          });
         transferHistoryRef.current = savedTransferHistory;
         setTransferHistory(savedTransferHistory);
         dirtyScheduleIdsRef.current = new Set(
@@ -1212,6 +1243,7 @@ export function AppProvider({ children }) {
       unsubscribeStatus();
       unsubscribeCloudStatus();
       unsubscribeCloudPresence();
+      unsubscribeBlockchainIdentity();
       unsubscribeCloudNotifications();
       unsubscribeRelayPackets();
       cloudTransferManager.stop();
@@ -1439,6 +1471,14 @@ export function AppProvider({ children }) {
           return true;
         }
 
+        const cloudCommandPermission = checkBlockchainPermission({
+          deviceId: cloudPairing.desktopDeviceId,
+          permissionName: 'remoteCommands',
+          operation: 'mobile-cloud-command',
+          localPermissions: permissionsRef.current,
+        });
+        if (!cloudCommandPermission.allowed) return false;
+
         const packet = {
           packetId,
           protocolVersion: 1,
@@ -1492,11 +1532,17 @@ export function AppProvider({ children }) {
       }
       if (
         !normalizedText ||
-        !paired ||
-        !permissionsRef.current.remoteCommands
+        !paired
       ) {
         return false;
       }
+      const commandPermission = checkBlockchainPermission({
+        deviceId: pairingDataRef.current.deviceId,
+        permissionName: 'remoteCommands',
+        operation: 'mobile-command',
+        localPermissions: permissionsRef.current,
+      });
+      if (!commandPermission.allowed) return false;
 
       if (!isSessionValid(sessionRef.current)) {
         setMessages((current) => [
@@ -1551,7 +1597,7 @@ export function AppProvider({ children }) {
     return relayClient.disconnect('manual-disconnect').then(() => nextSettings);
   }, [persistConnectionSettings]);
 
-  const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, security = null, deviceName: name }) => {
+  const pairCloudDevice = useCallback(async ({ relayUrl, pairToken, security = null, blockchain = null, deviceName: name }) => {
     const normalizedName = normalizeDeviceName(name || pairingDataRef.current.deviceName);
     if (!normalizedName) {
       throw new Error('Device name is required.');
@@ -1565,15 +1611,56 @@ export function AppProvider({ children }) {
       console.warn('Unable to reset the previous OpenX session.');
     });
 
+    let blockchainApproval = null;
+    if (blockchain) {
+      blockchainApproval = await blockchainIdentityService.approvePair({
+        ...blockchain,
+        pairToken,
+      });
+    }
+
     const result = await relayClient.pairWithToken({
       relayUrl: normalizedRelayUrl,
       pairToken,
       security,
+      blockchain: blockchainApproval ? {
+        pairHash: blockchainApproval.pairHash,
+        pairId: blockchainApproval.pairId,
+        status: blockchainApproval.status,
+        phoneDeviceId: blockchainApproval.phoneDeviceId,
+        phoneWallet: blockchainApproval.phoneWallet,
+        transactionHash: blockchainApproval.transactionHash,
+        blockNumber: blockchainApproval.blockNumber,
+      } : null,
       deviceName: normalizedName,
     });
     if (result.security?.masterKey) {
       persistCloudE2EEKey(result.security.masterKey).catch(() => {});
       relayClient.setE2EEMasterKey(result.security.masterKey);
+    }
+    const desktopTrust = result.desktopDeviceId ? {
+      deviceId: result.desktopDeviceId,
+      walletAddress: blockchainApproval?.desktopWallet || '',
+      trustStatus: 'TRUSTED',
+      lastVerified: new Date().toISOString(),
+      source: 'pairing',
+      transactionHash: blockchainApproval?.transactionHash || '',
+      blockNumber: blockchainApproval?.blockNumber || null,
+    } : null;
+    if (desktopTrust) {
+      blockchainIdentityService.cacheTrust(desktopTrust).catch(() => {});
+      ['remoteCommands', 'fileTransfer', 'receiveFiles', 'sendFiles', 'notifications'].forEach((permissionName) => {
+        cachePermissionRecord({
+          deviceId: desktopTrust.deviceId,
+          walletAddress: desktopTrust.walletAddress,
+          permissionName,
+          status: 'GRANTED',
+          grantedBy: desktopTrust.walletAddress,
+          source: 'pairing',
+          transactionHash: desktopTrust.transactionHash,
+          blockNumber: desktopTrust.blockNumber,
+        }).catch(() => {});
+      });
     }
 
     const nextPairingData = {
@@ -1588,6 +1675,7 @@ export function AppProvider({ children }) {
         desktopDeviceId: result.desktopDeviceId || '',
         phoneDeviceId: result.phoneDeviceId || readyPairingData.deviceId,
         pair: result.pair || null,
+        blockchain: blockchainApproval,
         e2ee: result.security?.enabled === true,
         e2eeScheme: result.security?.scheme || '',
         pairedAt: Date.now(),
@@ -1893,6 +1981,15 @@ export function AppProvider({ children }) {
         if (!relayClient.isConnected()) {
           throw new Error('Connect to OpenX Relay before transferring files.');
         }
+        const cloudFilePermission = checkBlockchainPermission({
+          deviceId: pairingData.cloudPairing?.desktopDeviceId,
+          permissionName: 'fileTransfer',
+          operation: 'mobile-cloud-file-send',
+          localPermissions: permissionsRef.current,
+        });
+        if (!cloudFilePermission.allowed) {
+          throw new Error('File transfers disabled by desktop.');
+        }
         const record = await cloudFileTransferRef.current?.sendFile(file);
         if (!record) throw new Error('Cloud file transfer is unavailable.');
         return record;
@@ -1902,11 +1999,23 @@ export function AppProvider({ children }) {
         throw new Error('Pair device before transferring files.');
       }
 
-      if (!permissionsRef.current.fileTransfer) {
+      const fileTransferPermission = checkBlockchainPermission({
+        deviceId: pairingData.deviceId,
+        permissionName: 'fileTransfer',
+        operation: 'mobile-file-send',
+        localPermissions: permissionsRef.current,
+      });
+      if (!fileTransferPermission.allowed) {
         throw new Error('File transfers disabled by desktop.');
       }
 
-      if (!permissionsRef.current.sendFiles) {
+      const sendFilesPermission = checkBlockchainPermission({
+        deviceId: pairingData.deviceId,
+        permissionName: 'sendFiles',
+        operation: 'mobile-file-send',
+        localPermissions: permissionsRef.current,
+      });
+      if (!sendFilesPermission.allowed) {
         throw new Error('Sending files disabled by desktop.');
       }
 
@@ -1923,10 +2032,22 @@ export function AppProvider({ children }) {
 
       try {
         const outgoingFile = await prepareOutgoingFile(file);
-        if (!permissionsRef.current.fileTransfer) {
+        const preparedFilePermission = checkBlockchainPermission({
+          deviceId: pairingData.deviceId,
+          permissionName: 'fileTransfer',
+          operation: 'mobile-file-send',
+          localPermissions: permissionsRef.current,
+        });
+        if (!preparedFilePermission.allowed) {
           throw new Error('File transfers disabled by desktop.');
         }
-        if (!permissionsRef.current.sendFiles) {
+        const preparedSendPermission = checkBlockchainPermission({
+          deviceId: pairingData.deviceId,
+          permissionName: 'sendFiles',
+          operation: 'mobile-file-send',
+          localPermissions: permissionsRef.current,
+        });
+        if (!preparedSendPermission.allowed) {
           throw new Error('Sending files disabled by desktop.');
         }
         const sent = await websocketService.sendFileTransfer({
@@ -2029,6 +2150,7 @@ export function AppProvider({ children }) {
       scheduleLastSyncedAt,
       sessionValid,
       sessionLoaded,
+      blockchainIdentity,
       sendMessage,
       pairCloudDevice,
       updateDeviceName,
@@ -2077,6 +2199,7 @@ export function AppProvider({ children }) {
       scheduleLastSyncedAt,
       sessionValid,
       sessionLoaded,
+      blockchainIdentity,
       sendMessage,
       pairCloudDevice,
       updateDeviceName,

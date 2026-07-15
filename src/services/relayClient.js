@@ -1,5 +1,6 @@
 import packageJson from '../../package.json';
 import * as Network from 'expo-network';
+import { blockchainIdentityService } from './blockchainIdentity';
 import { SecurePacketChannel, decryptJson, encryptJson } from './e2ee';
 
 const CONNECTION_STATES = new Set([
@@ -407,6 +408,15 @@ class RelayClient {
   }
 
   sendRelayPacket(packet) {
+    const trust = blockchainIdentityService.checkTrust({
+      deviceId: packet?.destinationDeviceId,
+      operation: 'mobile-outbound-relay-packet',
+    });
+    if (!trust.allowed) {
+      this.reliability.retryCount += 1;
+      this.emitStatus();
+      return false;
+    }
     const protectedPacket = this.protectRelayPacket(packet);
     const sent = this.send({
       type: 'relay:packet',
@@ -563,7 +573,7 @@ class RelayClient {
     });
   }
 
-  pairWithToken({ relayUrl, pairToken, security = null, deviceName, deviceType = 'phone', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
+  pairWithToken({ relayUrl, pairToken, security = null, blockchain = null, deviceName, deviceType = 'phone', timeoutMs = DEFAULT_PAIR_TIMEOUT_MS } = {}) {
     const token = String(pairToken || '').trim();
     if (!token) {
       return Promise.reject(new Error('Invalid cloud pairing QR code.'));
@@ -594,6 +604,7 @@ class RelayClient {
         platform: this.deviceIdentity.platform,
         softwareVersion: this.deviceIdentity.softwareVersion,
         version: this.deviceIdentity.softwareVersion,
+        blockchain,
         capabilities: {
           cloudPairing: true,
           localFirst: true,
@@ -714,7 +725,20 @@ class RelayClient {
         if (message.type === 'relay:ack') this.reliability.state = 'healthy';
         if (message.type === 'relay:packet') {
           const decrypted = this.unprotectRelayMessage(message);
-          if (decrypted) this.emitRelayMessage(decrypted);
+          if (decrypted) {
+            const trust = blockchainIdentityService.checkTrust({
+              deviceId: decrypted?.packet?.sourceDeviceId,
+              operation: 'mobile-inbound-relay-packet',
+            });
+            if (trust.allowed) this.emitRelayMessage(decrypted);
+            else this.emitRelayMessage({
+              type: 'relay:error',
+              code: 'trust-denied',
+              packetId: decrypted?.packet?.packetId || null,
+              requestId: decrypted?.packet?.requestId || null,
+              message: 'Device trust check denied this packet.',
+            });
+          }
         } else {
           this.emitRelayMessage(message);
         }
