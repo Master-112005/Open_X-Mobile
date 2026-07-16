@@ -61,6 +61,7 @@ import { subscribeToNativeNotifications } from '../services/nativeNotificationBr
 const SETTINGS_KEY = '@openx/settings';
 const PAIRING_KEY = '@openx/pairing';
 const PROFILE_KEY = '@openx/profile';
+const CHAT_HISTORY_KEY = '@openx/chat-history-v1';
 const DIRTY_SCHEDULES_KEY = '@openx/schedules/dirty';
 const CLOUD_E2EE_KEY = 'openx.cloud.e2eeMasterKey';
 const DEFAULT_PORT = '8080';
@@ -69,6 +70,9 @@ const DEFAULT_CONNECTION_MODE = 'cloud';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
+const MAX_MOBILE_CHAT_HISTORY = 250;
+const MAX_MOBILE_MESSAGE_TEXT = 3000;
+const MAX_MOBILE_MESSAGE_DATA_BYTES = 20000;
 const MAX_PENDING_MOBILE_NOTIFICATIONS = 50;
 const MOBILE_NOTIFICATION_BURST_WINDOW_MS = 450;
 const MOBILE_NOTIFICATION_DEDUPE_MS = 2500;
@@ -127,6 +131,63 @@ const createMessage = (role, text, timestamp = Date.now(), metadata = {}) => {
       : parsedTimestamp.toISOString(),
     ...metadata,
   };
+};
+
+const sanitizeMessageText = (value) =>
+  String(value || '')
+    .replace(/\b(password|passcode|token|api\s*key|secret|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1: [redacted]')
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[email redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_MOBILE_MESSAGE_TEXT);
+
+const sanitizePersistedMessageData = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  try {
+    const text = JSON.stringify(data);
+    if (text.length > MAX_MOBILE_MESSAGE_DATA_BYTES) return null;
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const normalizeStoredMessage = (message = {}) => {
+  const role = ['user', 'assistant', 'system'].includes(message.role)
+    ? message.role
+    : 'assistant';
+  const text = sanitizeMessageText(message.text);
+  if (!text) return null;
+  const parsedTimestamp = new Date(message.timestamp || message.createdAt || Date.now());
+  const timestamp = Number.isNaN(parsedTimestamp.getTime())
+    ? new Date().toISOString()
+    : parsedTimestamp.toISOString();
+  const data = sanitizePersistedMessageData(message.data);
+  const choices = Array.isArray(message.choices)
+    ? message.choices.slice(0, 8)
+    : (Array.isArray(data?.choices) ? data.choices.slice(0, 8) : []);
+  return {
+    id: String(message.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`),
+    role,
+    text,
+    timestamp,
+    intent: typeof message.intent === 'string' ? message.intent.slice(0, 120) : null,
+    data,
+    entities: sanitizePersistedMessageData(message.entities),
+    choices,
+    needsClarification: message.needsClarification === true,
+  };
+};
+
+const normalizeStoredMessages = (value) => {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed)
+      ? parsed.map(normalizeStoredMessage).filter(Boolean).slice(-MAX_MOBILE_CHAT_HISTORY)
+      : [];
+  } catch {
+    return [];
+  }
 };
 
 const initialMessages = [];
@@ -277,6 +338,7 @@ export function AppProvider({ children }) {
   const sessionRef = useRef(EMPTY_SESSION);
   const settingsRef = useRef(normalizeConnectionSettings({}));
   const openXProfileRef = useRef(EMPTY_PROFILE);
+  const chatHistoryLoadedRef = useRef(false);
 
   const showNotice = useCallback((nextNotice) => {
     const normalized = typeof nextNotice === 'string'
@@ -663,6 +725,22 @@ export function AppProvider({ children }) {
     }
     if (!Array.isArray(data.resultEntries) && Array.isArray(resultSource.resultEntries)) {
       data.resultEntries = resultSource.resultEntries;
+    }
+    [
+      'photos',
+      'images',
+      'memories',
+      'matches',
+      'people',
+      'collections',
+      'visualResults',
+    ].forEach((key) => {
+      if (!Array.isArray(data[key]) && Array.isArray(resultSource[key])) {
+        data[key] = resultSource[key];
+      }
+    });
+    if (!data.gallery && resultSource.gallery && typeof resultSource.gallery === 'object') {
+      data.gallery = resultSource.gallery;
     }
     return {
       requestId: envelope.requestId || packet.requestId || '',
@@ -1126,6 +1204,7 @@ export function AppProvider({ children }) {
           savedSchedules,
           savedProfile,
           savedDirtySchedules,
+          savedChatHistory,
         ] = await Promise.all([
           AsyncStorage.getItem(SETTINGS_KEY),
           AsyncStorage.getItem(PAIRING_KEY),
@@ -1136,6 +1215,7 @@ export function AppProvider({ children }) {
           loadSchedules(),
           AsyncStorage.getItem(PROFILE_KEY),
           AsyncStorage.getItem(DIRTY_SCHEDULES_KEY),
+          AsyncStorage.getItem(CHAT_HISTORY_KEY),
         ]);
         if (!mounted) return;
 
@@ -1171,6 +1251,8 @@ export function AppProvider({ children }) {
         );
         scheduleItemsRef.current = savedSchedules;
         setScheduleItems(savedSchedules);
+        setMessages(normalizeStoredMessages(savedChatHistory));
+        chatHistoryLoadedRef.current = true;
         applyOpenXProfile(parseStoredObject(savedProfile), false);
         applyPermissionState(savedPermissionState);
         applySession(savedSession);
@@ -1192,6 +1274,7 @@ export function AppProvider({ children }) {
         console.warn('Unable to load OpenX local data.', error);
       } finally {
         if (mounted) {
+          chatHistoryLoadedRef.current = true;
           setSettingsLoaded(true);
           setPairingLoaded(true);
           setTransfersLoaded(true);
@@ -1235,6 +1318,17 @@ export function AppProvider({ children }) {
     requestScheduleSync,
     showNotice,
   ]);
+
+  useEffect(() => {
+    if (!chatHistoryLoadedRef.current) return;
+    const normalized = messages
+      .map(normalizeStoredMessage)
+      .filter(Boolean)
+      .slice(-MAX_MOBILE_CHAT_HISTORY);
+    AsyncStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(normalized)).catch(() => {
+      console.warn('Unable to persist OpenX chat history.');
+    });
+  }, [messages]);
 
   useEffect(() => {
     let timer;
@@ -1452,6 +1546,7 @@ export function AppProvider({ children }) {
           metadata: {
             feature: 'assistant-command',
             deviceName: pairingDataRef.current.deviceName,
+            retryable: true,
           },
           checksum: null,
           encryption: null,

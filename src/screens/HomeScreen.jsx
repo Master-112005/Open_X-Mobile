@@ -5,7 +5,9 @@ import {
   Animated,
   Easing,
   FlatList,
+  Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,7 +19,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatBubble from '../components/ChatBubble';
 import { useApp } from '../context/AppContext';
-import { formatFileSize, pickTransferFile } from '../services/fileTransfer';
+import {
+  formatFileSize,
+  isImageTransferFile,
+  pickTransferFile,
+} from '../services/fileTransfer';
 import { parseMobileScheduleCommand } from '../services/mobileScheduleIntelligence';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
@@ -100,9 +106,11 @@ export default function HomeScreen({ navigation }) {
   } = useApp();
   const [text, setText] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
   const [selectingFile, setSelectingFile] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
   const listRef = useRef(null);
+  const scrollFrameRef = useRef(null);
   const insets = useSafeAreaInsets();
   const topControlsHeight = insets.top + spacing.sm + 58 + spacing.lg;
   const activeConnectionStatus = connectionMode === 'cloud'
@@ -137,6 +145,11 @@ export default function HomeScreen({ navigation }) {
       permissions.sendFiles &&
       sessionLoaded &&
       sessionValid;
+  const selectedFileIsImage = useMemo(() => isImageTransferFile(selectedFile), [selectedFile]);
+  const previewImageUri = useMemo(() => {
+    const source = String(imagePreview?.imageUri || imagePreview?.thumbnailUri || imagePreview?.uri || imagePreview?.url || '');
+    return /^(?:https?:|file:|content:|data:image\/)/i.test(source) ? source : '';
+  }, [imagePreview]);
 
   const composerHint = useMemo(() => {
     if (selectedFile) return selectedFile.fileName;
@@ -145,12 +158,21 @@ export default function HomeScreen({ navigation }) {
   }, [commandRestriction, selectedFile]);
 
   const scrollToNewest = useCallback(() => {
-    requestAnimationFrame(() => {
+    if (scrollFrameRef.current) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
       listRef.current?.scrollToEnd({ animated: true });
     });
   }, []);
 
-  const handlePickFile = async () => {
+  useEffect(() => () => {
+    if (scrollFrameRef.current) {
+      cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
+  }, []);
+
+  const handlePickFile = useCallback(async () => {
     if (!canSendFile) {
       showNotice({ title: 'File transfer unavailable', message: cloudStatus?.friendlyMessage || 'Connect and pair with OpenX Desktop before sending a file.', tone: 'warning' });
       return;
@@ -164,7 +186,7 @@ export default function HomeScreen({ navigation }) {
     } finally {
       setSelectingFile(false);
     }
-  };
+  }, [canSendFile, cloudStatus?.friendlyMessage, showNotice]);
 
   const handleSend = async () => {
     if (selectedFile) {
@@ -190,6 +212,16 @@ export default function HomeScreen({ navigation }) {
       scrollToNewest();
     }
   }, [commandRestriction, scrollToNewest, sendMessage]);
+
+  const renderMessage = useCallback(({ item }) => (
+    <ChatBubble
+      message={item}
+      onChoice={handleChoice}
+      onPreview={setImagePreview}
+    />
+  ), [handleChoice]);
+
+  const keyMessage = useCallback((item) => item.id, []);
 
   const handleReconnect = useCallback(() => {
     reconnectActiveConnection?.().catch((error) => {
@@ -250,15 +282,20 @@ export default function HomeScreen({ navigation }) {
             { paddingTop: topControlsHeight + spacing.md, paddingBottom: spacing.xl },
           ]}
           data={messages}
-          keyExtractor={(item) => item.id}
+          initialNumToRender={14}
+          keyExtractor={keyMessage}
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
+          maxToRenderPerBatch={8}
           onContentSizeChange={scrollToNewest}
           onLayout={scrollToNewest}
           ref={listRef}
-          renderItem={({ item }) => <ChatBubble message={item} onChoice={handleChoice} />}
+          removeClippedSubviews={Platform.OS === 'android'}
+          renderItem={renderMessage}
           showsVerticalScrollIndicator={false}
           style={styles.list}
+          updateCellsBatchingPeriod={48}
+          windowSize={9}
         />
 
         <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
@@ -279,8 +316,17 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.inputStack}>
               {selectedFile ? (
                 <View style={styles.fileChip}>
-                  <Text numberOfLines={1} style={styles.fileName}>{selectedFile.fileName}</Text>
-                  <Text style={styles.fileSize}>{formatFileSize(selectedFile.fileSize)}</Text>
+                  {selectedFileIsImage ? (
+                    <Image source={{ uri: selectedFile.uri }} style={styles.filePreview} />
+                  ) : (
+                    <View style={styles.fileIcon}>
+                      <Ionicons color={colors.textSecondary} name="document-outline" size={18} />
+                    </View>
+                  )}
+                  <View style={styles.fileText}>
+                    <Text numberOfLines={1} style={styles.fileName}>{selectedFile.fileName}</Text>
+                    <Text style={styles.fileSize}>{formatFileSize(selectedFile.fileSize)}</Text>
+                  </View>
                   <Pressable
                     accessibilityLabel="Remove selected file"
                     accessibilityRole="button"
@@ -328,6 +374,41 @@ export default function HomeScreen({ navigation }) {
           </LinearGradient>
         </View>
       </KeyboardAvoidingView>
+      <Modal
+        animationType="fade"
+        onRequestClose={() => setImagePreview(null)}
+        transparent
+        visible={Boolean(imagePreview)}
+      >
+        <View style={styles.previewOverlay}>
+          <View style={styles.previewPanel}>
+            <Pressable
+              accessibilityLabel="Close image preview"
+              accessibilityRole="button"
+              onPress={() => setImagePreview(null)}
+              style={({ pressed }) => [styles.previewClose, pressed && styles.smallPressed]}
+            >
+              <Ionicons color={colors.text} name="close" size={22} />
+            </Pressable>
+            <View style={styles.previewMedia}>
+              {previewImageUri ? (
+                <Image resizeMode="contain" source={{ uri: previewImageUri }} style={styles.previewImage} />
+              ) : (
+                <View style={styles.previewPlaceholder}>
+                  <Ionicons color={colors.textSecondary} name="image-outline" size={42} />
+                  <Text style={styles.previewPlaceholderText}>Preview is available on OpenX Desktop</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.previewCopy}>
+              <Text numberOfLines={1} style={styles.previewTitle}>{imagePreview?.name || 'Photo Memory'}</Text>
+              <Text numberOfLines={2} style={styles.previewMeta}>
+                {[imagePreview?.location, imagePreview?.matchScore ? `${Math.round(imagePreview.matchScore)}% match` : '', imagePreview?.path].filter(Boolean).join(' - ')}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -477,9 +558,30 @@ const styles = StyleSheet.create({
     paddingLeft: spacing.md,
     paddingRight: spacing.xs,
   },
+  filePreview: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: 13,
+    borderWidth: 1,
+    height: 34,
+    width: 34,
+  },
+  fileIcon: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  fileText: {
+    flex: 1,
+    minWidth: 0,
+  },
   fileName: {
     color: colors.text,
-    flex: 1,
     fontSize: 13,
     fontWeight: '800',
   },
@@ -494,5 +596,81 @@ const styles = StyleSheet.create({
     height: 30,
     justifyContent: 'center',
     width: 30,
+  },
+  previewOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  previewPanel: {
+    ...shadows.card,
+    backgroundColor: 'rgba(18,18,22,0.96)',
+    borderColor: colors.border,
+    borderRadius: 24,
+    borderWidth: 1,
+    maxHeight: '82%',
+    overflow: 'hidden',
+    padding: spacing.md,
+    width: '100%',
+  },
+  previewClose: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: spacing.lg,
+    top: spacing.lg,
+    width: 38,
+    zIndex: 2,
+  },
+  previewMedia: {
+    alignItems: 'center',
+    aspectRatio: 1,
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    justifyContent: 'center',
+    overflow: 'hidden',
+    width: '100%',
+  },
+  previewImage: {
+    height: '100%',
+    width: '100%',
+  },
+  previewPlaceholder: {
+    alignItems: 'center',
+    gap: spacing.sm,
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  previewPlaceholderText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  previewCopy: {
+    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.md,
+  },
+  previewTitle: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  previewMeta: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 4,
   },
 });

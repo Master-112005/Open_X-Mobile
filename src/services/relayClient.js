@@ -16,6 +16,7 @@ const LEGACY_DEFAULT_RELAY_URLS = new Set(['ws://localhost:8081/ws']);
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_RETRY_QUEUE_SIZE = 100;
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 20000, 30000];
 export const MOBILE_APP_VERSION = String(packageJson?.version || '1.0.0');
 
@@ -86,6 +87,12 @@ export const normalizeCloudSettings = (settings = {}) => ({
     120000,
     DEFAULT_HEARTBEAT_MS,
   ),
+  retryQueueMaxItems: clampNumber(
+    settings.retryQueueMaxItems,
+    1,
+    500,
+    DEFAULT_RETRY_QUEUE_SIZE,
+  ),
 });
 
 class RelayClient {
@@ -97,6 +104,10 @@ class RelayClient {
   reconnectTimer = null;
   connectTimeout = null;
   heartbeatTimer = null;
+  connectAttemptId = 0;
+  pendingHeartbeatAt = 0;
+  latencyMs = null;
+  retryQueue = [];
   pendingPairing = null;
   connectedAt = null;
   lastConnectedAt = null;
@@ -117,6 +128,7 @@ class RelayClient {
     sessionRestoreCount: 0,
     retryCount: 0,
     lastRecoveryAt: null,
+    lastRecoveryReason: null,
   };
   deviceIdentity = {
     deviceId: '',
@@ -191,6 +203,9 @@ class RelayClient {
   }
 
   open(isReconnect) {
+    const attemptId = ++this.connectAttemptId;
+    this.clearConnectTimeout();
+    this.stopHeartbeat();
     this.closeCurrentSocket();
     this.setStatus(isReconnect ? 'reconnecting' : 'connecting');
     this.friendlyMessage = isReconnect
@@ -201,6 +216,7 @@ class RelayClient {
     return new Promise((resolve, reject) => {
       let settled = false;
       let socket;
+      let failureReason = '';
 
       const settleSuccess = () => {
         if (settled) return;
@@ -228,7 +244,8 @@ class RelayClient {
       this.socket = socket;
 
       this.connectTimeout = setTimeout(async () => {
-        if (socket !== this.socket || socket.readyState === WebSocket.OPEN) return;
+        if (attemptId !== this.connectAttemptId || socket !== this.socket || socket.readyState === WebSocket.OPEN) return;
+        failureReason = 'connection-timeout';
         this.networkStatus = await readNetworkStatus();
         this.friendlyMessage = this.networkStatus.online === false
           ? OFFLINE_MESSAGE
@@ -241,7 +258,7 @@ class RelayClient {
       }, this.settings.connectionTimeoutMs);
 
       socket.onopen = () => {
-        if (socket !== this.socket) return;
+        if (attemptId !== this.connectAttemptId || socket !== this.socket) return;
         this.clearConnectTimeout();
         this.connectedAt = Date.now();
         this.lastConnectedAt = this.connectedAt;
@@ -255,12 +272,13 @@ class RelayClient {
       };
 
       socket.onmessage = (event) => {
-        if (socket !== this.socket) return;
+        if (attemptId !== this.connectAttemptId || socket !== this.socket) return;
         this.handleMessage(event.data);
       };
 
       socket.onerror = async () => {
-        if (socket !== this.socket) return;
+        if (attemptId !== this.connectAttemptId || socket !== this.socket) return;
+        if (failureReason !== 'connection-timeout') failureReason = 'socket-error';
         this.clearConnectTimeout();
         this.networkStatus = await readNetworkStatus();
         this.friendlyMessage = this.networkStatus.online === false
@@ -274,7 +292,7 @@ class RelayClient {
       };
 
       socket.onclose = () => {
-        if (socket !== this.socket) return;
+        if (attemptId !== this.connectAttemptId || socket !== this.socket) return;
         this.clearConnectTimeout();
         this.stopHeartbeat();
         this.socket = null;
@@ -298,6 +316,7 @@ class RelayClient {
         this.friendlyMessage = 'Connection dropped. Reconnecting safely...';
         this.reliability.droppedConnections += 1;
         this.reliability.lastRecoveryAt = Date.now();
+        this.reliability.lastRecoveryReason = failureReason || 'socket-closed';
         this.setStatus(this.settings.reconnectEnabled ? 'reconnecting' : 'error');
         this.scheduleReconnect();
         settleFailure(new Error(this.friendlyMessage));
@@ -358,7 +377,7 @@ class RelayClient {
   }
 
   getLatency() {
-    return null;
+    return Number.isFinite(this.latencyMs) ? this.latencyMs : null;
   }
 
   getStatus(extra = {}) {
@@ -413,10 +432,52 @@ class RelayClient {
       packet: protectedPacket,
     });
     if (!sent && packet?.metadata?.retryable === true) {
-      this.reliability.retryCount += 1;
+      const queued = this.queueRetryableRelayPacket(packet);
       this.emitStatus();
+      return queued;
     }
     return sent;
+  }
+
+  queueRetryableRelayPacket(packet) {
+    if (!packet || typeof packet !== 'object') return false;
+    const packetId = String(packet.packetId || packet.requestId || '').trim();
+    if (packetId && this.retryQueue.some((item) => item.packetId === packetId)) return false;
+    this.retryQueue.push({
+      packetId,
+      queuedAt: Date.now(),
+      packet,
+    });
+    const maxItems = this.settings.retryQueueMaxItems || DEFAULT_RETRY_QUEUE_SIZE;
+    if (this.retryQueue.length > maxItems) {
+      this.retryQueue.splice(0, this.retryQueue.length - maxItems);
+    }
+    this.reliability.retryCount += 1;
+    this.reliability.state = 'recovering';
+    return true;
+  }
+
+  flushRetryQueue() {
+    if (!this.isConnected() || this.retryQueue.length === 0) return 0;
+    const queued = this.retryQueue.splice(0);
+    let sentCount = 0;
+    for (const item of queued) {
+      const sent = this.send({
+        type: 'relay:packet',
+        packet: this.protectRelayPacket(item.packet),
+      });
+      if (sent) {
+        sentCount += 1;
+      } else {
+        this.retryQueue.unshift(item);
+        break;
+      }
+    }
+    if (sentCount > 0) {
+      this.reliability.state = 'healthy';
+      this.emitStatus();
+    }
+    return sentCount;
   }
 
   updatePresence(state, metadata = {}) {
@@ -653,6 +714,10 @@ class RelayClient {
   handleMessage(rawMessage) {
     try {
       const message = JSON.parse(rawMessage);
+      if (message.type === 'pong' || /:ack$/.test(String(message.type || ''))) {
+        this.handleHeartbeatAck();
+        if (message.type === 'pong' || message.type === 'mobile-heartbeat:ack') return;
+      }
       if (message.type === 'connected') {
         this.clientId = String(message.clientId || '').trim();
         this.serverVersion = String(message.version || '').trim();
@@ -667,6 +732,7 @@ class RelayClient {
         this.reliability.sessionRestoreCount += 1;
         this.subscribePresence();
         this.requestNotificationList();
+        this.flushRetryQueue();
         this.emitStatus();
         return;
       }
@@ -914,6 +980,16 @@ class RelayClient {
     this.statusListeners.forEach((listener) => listener(status));
   }
 
+  handleHeartbeatAck() {
+    if (this.pendingHeartbeatAt > 0) {
+      this.latencyMs = Math.max(0, Date.now() - this.pendingHeartbeatAt);
+      this.pendingHeartbeatAt = 0;
+    }
+    if (this.reliability.state !== 'healthy' && this.isConnected()) {
+      this.reliability.state = 'healthy';
+    }
+  }
+
   scheduleReconnect() {
     if (
       this.manuallyDisconnected ||
@@ -943,9 +1019,23 @@ class RelayClient {
     if (!this.settings.heartbeatEnabled) return;
     this.heartbeatTimer = setInterval(() => {
       if (!this.isConnected()) return;
+      if (
+        this.pendingHeartbeatAt > 0 &&
+        Date.now() - this.pendingHeartbeatAt > this.settings.heartbeatIntervalMs * 2
+      ) {
+        this.friendlyMessage = 'Cloud heartbeat timed out. Reconnecting to OpenX...';
+        this.reliability.lastRecoveryAt = Date.now();
+        this.reliability.lastRecoveryReason = 'heartbeat-timeout';
+        try {
+          this.socket?.close?.();
+        } catch {}
+        return;
+      }
+      this.pendingHeartbeatAt = Date.now();
       this.send({
         type: 'mobile-heartbeat',
-        timestamp: Date.now(),
+        requestId: createRequestId('mobile-heartbeat'),
+        timestamp: this.pendingHeartbeatAt,
       });
     }, this.settings.heartbeatIntervalMs);
   }
@@ -953,6 +1043,7 @@ class RelayClient {
   stopHeartbeat() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+    this.pendingHeartbeatAt = 0;
   }
 
   closeCurrentSocket() {
@@ -1006,7 +1097,7 @@ class RelayClient {
     return {
       ...this.reliability,
       reconnectAttempts: this.reconnectAttempts,
-      retryQueueSize: 0,
+      retryQueueSize: this.retryQueue.length,
     };
   }
 }

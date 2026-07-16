@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { AccessibilityInfo, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { memo, useEffect, useMemo, useRef } from 'react';
+import { AccessibilityInfo, Animated, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, shadows, spacing } from '../styles/theme';
 
@@ -9,12 +9,94 @@ const formatTime = (timestamp) =>
     minute: '2-digit',
   }).format(new Date(timestamp));
 
+const VISUAL_RESULT_KEYS = [
+  'visualResults',
+  'memories',
+  'photos',
+  'images',
+  'matches',
+  'people',
+  'collections',
+  'resultEntries',
+  'entries',
+  'results',
+];
+const VISUAL_SPECIFIC_RESULT_KEYS = VISUAL_RESULT_KEYS.filter(
+  (key) => !['resultEntries', 'entries', 'results'].includes(key),
+);
+const RECENT_MESSAGE_ANIMATION_MS = 10000;
+let reduceMotionPromise = null;
+
+const getReduceMotionPreference = () => {
+  if (!reduceMotionPromise) {
+    reduceMotionPromise = AccessibilityInfo.isReduceMotionEnabled().catch(() => false);
+  }
+  return reduceMotionPromise;
+};
+
+const getLeafName = (value) =>
+  String(value || '').split(/[\\/]/).filter(Boolean).pop() || '';
+
+const getFirstArray = (source, keys) => {
+  if (!source || typeof source !== 'object') return [];
+  for (const key of keys) {
+    if (Array.isArray(source[key])) return source[key];
+  }
+  return [];
+};
+
+const isVisualPayload = (intent, data) => {
+  const normalizedIntent = String(intent || '').toLowerCase();
+  if (/(?:visual|gallery|photo|photos|image|memory|memories|people|face)/.test(normalizedIntent)) {
+    return true;
+  }
+  return VISUAL_SPECIFIC_RESULT_KEYS.some((key) => Array.isArray(data?.[key]));
+};
+
+const normalizeVisualLabel = (entry, index) =>
+  String(
+    entry?.title ||
+    entry?.name ||
+    entry?.label ||
+    entry?.caption ||
+    entry?.memoryTitle ||
+    entry?.fileName ||
+    getLeafName(entry?.path || entry?.uri || entry?.url) ||
+    `Memory ${index + 1}`,
+  );
+
+const formatScore = (value) => {
+  const score = Number(value);
+  if (!Number.isFinite(score) || score <= 0) return '';
+  return `${Math.round(score <= 1 ? score * 100 : score)}% match`;
+};
+
+const getResultKindLabel = (type) => {
+  const normalized = String(type || '').toLowerCase();
+  if (normalized === 'folder') return 'Folder';
+  if (normalized === 'web') return 'Web';
+  if (normalized === 'person' || normalized === 'face') return 'Person';
+  if (normalized === 'collection') return 'Set';
+  if (normalized === 'memory') return 'Memory';
+  if (normalized === 'photo' || normalized === 'image') return 'Photo';
+  return 'File';
+};
+
+const isPreviewableResult = (entry) =>
+  ['photo', 'image', 'memory', 'person', 'face'].includes(String(entry?.type || '').toLowerCase());
+
+const visualImageUri = (entry = {}) => {
+  const source = String(entry.thumbnailUri || entry.thumbnailUrl || entry.imageUri || entry.imageUrl || entry.src || entry.uri || '');
+  return /^(?:https?:|file:|content:|data:image\/)/i.test(source) ? source : '';
+};
+
 function normalizeResultEntries(message) {
   const intent = String(message?.intent || '');
+  const data = message?.data && typeof message.data === 'object' ? message.data : {};
   if (intent === 'browser.search') {
-    const sources = Array.isArray(message?.data?.searchSummary?.sources)
+    const sources = Array.isArray(data?.searchSummary?.sources)
       ? message.data.searchSummary.sources
-      : (Array.isArray(message?.data?.results) ? message.data.results : []);
+      : (Array.isArray(data?.results) ? data.results : []);
     return sources.slice(0, 4).map((entry, index) => ({
       index: index + 1,
       name: String(entry?.title || entry?.sourceDomain || `Source ${index + 1}`),
@@ -26,11 +108,41 @@ function normalizeResultEntries(message) {
     }));
   }
 
+  if (isVisualPayload(intent, data)) {
+    const entries = getFirstArray(data, VISUAL_RESULT_KEYS);
+    return entries.slice(0, 10).map((entry, index) => {
+      const people = Array.isArray(entry?.people)
+        ? entry.people.map((person) => String(person?.name || person?.label || person)).filter(Boolean).slice(0, 3).join(', ')
+        : String(entry?.personName || entry?.relationship || '');
+      const objects = Array.isArray(entry?.objects)
+        ? entry.objects.map((object) => String(object?.name || object?.label || object)).filter(Boolean).slice(0, 4).join(', ')
+        : '';
+      const location = String(entry?.location || entry?.place || entry?.city || '');
+      const detail = [
+        String(entry?.event || entry?.scene || entry?.collection || ''),
+        people,
+        objects,
+      ].filter(Boolean).join(' - ');
+      return {
+        index: index + 1,
+        photoId: String(entry?.photoId || entry?.id || ''),
+        name: normalizeVisualLabel(entry, index),
+        type: String(entry?.type || entry?.kind || (people ? 'person' : 'photo')),
+        path: String(entry?.path || entry?.uri || entry?.url || ''),
+        imageUri: visualImageUri(entry),
+        location,
+        snippet: String(entry?.summary || entry?.description || entry?.ocrText || ''),
+        detail,
+        matchScore: Number(entry?.matchScore || entry?.confidence || entry?.score || entry?.rankingScore || 0),
+      };
+    });
+  }
+
   if (!['file.search', 'folder.search', 'file.smartFind', 'file.list'].includes(intent)) {
     return [];
   }
 
-  const entries = Array.isArray(message?.data?.entries) ? message.data.entries : [];
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
   return entries.slice(0, 6).map((entry, index) => ({
     index: index + 1,
     name: String(entry?.name || entry?.path?.split(/[\\/]/).filter(Boolean).pop() || `Result ${index + 1}`),
@@ -42,22 +154,76 @@ function normalizeResultEntries(message) {
   }));
 }
 
-function ResultCards({ entries }) {
+function ResultCards({ entries, onPreview, visual }) {
   if (!entries.length) return null;
+  if (visual) {
+    return (
+      <ScrollView
+        contentContainerStyle={styles.visualResultStrip}
+        horizontal
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+        showsHorizontalScrollIndicator={false}
+        style={styles.visualResultViewport}
+      >
+        {entries.slice(0, 10).map((entry) => (
+          <Pressable
+            accessibilityLabel={`Preview ${entry.name}`}
+            accessibilityRole="button"
+            key={`${entry.index}-${entry.photoId || entry.path || entry.name}`}
+            onPress={() => onPreview?.(entry)}
+            style={({ pressed }) => [styles.visualResultCard, pressed && styles.choicePressed]}
+          >
+            <View style={styles.visualThumb}>
+              {entry.imageUri ? (
+                <Image resizeMode="cover" source={{ uri: entry.imageUri }} style={styles.visualThumbImage} />
+              ) : (
+                <Text style={styles.visualThumbFallback}>IMG</Text>
+              )}
+            </View>
+            <View style={styles.visualCopy}>
+              <Text numberOfLines={1} style={styles.visualName}>{entry.name}</Text>
+              <Text numberOfLines={1} style={styles.visualMeta}>
+                {[entry.type, formatScore(entry.matchScore)].filter(Boolean).join(' - ') || 'Possible match'}
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </ScrollView>
+    );
+  }
   return (
     <View style={styles.resultList}>
-      {entries.map((entry) => (
-        <View key={`${entry.index}-${entry.path || entry.name}`} style={styles.resultCard}>
-          <Text style={styles.resultKind}>{entry.type === 'folder' ? 'Folder' : entry.type === 'web' ? 'Web' : 'File'}</Text>
-          <View style={styles.resultCopy}>
-            <Text numberOfLines={1} style={styles.resultName}>{entry.name}</Text>
-            {entry.snippet ? <Text numberOfLines={2} style={styles.resultMeta}>{entry.snippet}</Text> : null}
-            <Text numberOfLines={2} style={styles.resultMeta}>
-              {[entry.location, entry.sizeMB > 0 ? `${entry.sizeMB} MB` : '', entry.matchScore > 0 && entry.type !== 'web' ? `${Math.round(entry.matchScore)}% match` : '', entry.path].filter(Boolean).join(' - ')}
-            </Text>
+      {entries.map((entry) => {
+        const content = (
+          <>
+            <Text style={styles.resultKind}>{getResultKindLabel(entry.type)}</Text>
+            <View style={styles.resultCopy}>
+              <Text numberOfLines={1} style={styles.resultName}>{entry.name}</Text>
+              {entry.snippet ? <Text numberOfLines={2} style={styles.resultMeta}>{entry.snippet}</Text> : null}
+              {entry.detail ? <Text numberOfLines={2} style={styles.resultMeta}>{entry.detail}</Text> : null}
+              <Text numberOfLines={2} style={styles.resultMeta}>
+                {[entry.location, entry.sizeMB > 0 ? `${entry.sizeMB} MB` : '', entry.type !== 'web' ? formatScore(entry.matchScore) : '', entry.path].filter(Boolean).join(' - ')}
+              </Text>
+            </View>
+          </>
+        );
+        return isPreviewableResult(entry) ? (
+          <Pressable
+            accessibilityLabel={`Preview ${entry.name}`}
+            accessibilityRole="button"
+            key={`${entry.index}-${entry.photoId || entry.path || entry.name}`}
+            onPress={() => onPreview?.(entry)}
+            style={({ pressed }) => [styles.resultCard, styles.resultCardPressable, pressed && styles.choicePressed]}
+          >
+            {content}
+          </Pressable>
+        ) : (
+          <View key={`${entry.index}-${entry.path || entry.name}`} style={styles.resultCard}>
+            {content}
           </View>
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -93,16 +259,19 @@ function ChoiceCards({ choices, onChoice }) {
   );
 }
 
-export default function ChatBubble({ message, onChoice }) {
+function ChatBubble({ message, onChoice, onPreview }) {
   const isUser = message.role === 'user';
-  const resultEntries = !isUser ? normalizeResultEntries(message) : [];
+  const resultEntries = useMemo(() => (!isUser ? normalizeResultEntries(message) : []), [isUser, message]);
+  const visualResults = !isUser && isVisualPayload(message?.intent, message?.data);
   const choices = !isUser && Array.isArray(message.choices) ? message.choices : [];
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(8)).current;
+  const shouldAnimate = useRef(Date.now() - new Date(message.timestamp || Date.now()).getTime() < RECENT_MESSAGE_ANIMATION_MS).current;
+  const opacity = useRef(new Animated.Value(shouldAnimate ? 0 : 1)).current;
+  const translateY = useRef(new Animated.Value(shouldAnimate ? 8 : 0)).current;
 
   useEffect(() => {
+    if (!shouldAnimate) return undefined;
     let active = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((reduceMotion) => {
+    getReduceMotionPreference().then((reduceMotion) => {
       if (!active || reduceMotion) {
         opacity.setValue(1);
         translateY.setValue(0);
@@ -126,7 +295,7 @@ export default function ChatBubble({ message, onChoice }) {
     return () => {
       active = false;
     };
-  }, [opacity, translateY]);
+  }, [opacity, shouldAnimate, translateY]);
 
   return (
     <Animated.View
@@ -143,7 +312,7 @@ export default function ChatBubble({ message, onChoice }) {
         ]}
       >
         <Text style={styles.message}>{message.text}</Text>
-        <ResultCards entries={resultEntries} />
+        <ResultCards entries={resultEntries} onPreview={onPreview} visual={visualResults} />
         <ChoiceCards choices={choices} onChoice={onChoice} />
         <Text style={[styles.time, isUser && styles.userTime]}>
           {formatTime(message.timestamp)}
@@ -152,6 +321,8 @@ export default function ChatBubble({ message, onChoice }) {
     </Animated.View>
   );
 }
+
+export default memo(ChatBubble);
 
 const styles = StyleSheet.create({
   row: {
@@ -168,6 +339,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.lg,
     borderWidth: 1,
+    maxWidth: '100%',
+    minWidth: 0,
     paddingHorizontal: 15,
     paddingVertical: 12,
   },
@@ -186,6 +359,53 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.md,
   },
+  visualResultStrip: {
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  visualResultViewport: {
+    marginTop: spacing.md,
+    maxWidth: '100%',
+  },
+  visualResultCard: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+    width: 142,
+  },
+  visualThumb: {
+    alignItems: 'center',
+    aspectRatio: 4 / 3,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  visualThumbImage: {
+    height: '100%',
+    width: '100%',
+  },
+  visualThumbFallback: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  visualCopy: {
+    gap: 3,
+    padding: spacing.sm,
+  },
+  visualName: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  visualMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
   resultCard: {
     backgroundColor: colors.glassSubtle,
     borderColor: colors.border,
@@ -194,6 +414,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     padding: spacing.sm,
+  },
+  resultCardPressable: {
+    minHeight: 56,
   },
   resultKind: {
     color: colors.text,

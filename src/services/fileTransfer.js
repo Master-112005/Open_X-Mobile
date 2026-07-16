@@ -96,9 +96,18 @@ export async function calculateFileHash(uri, size = null) {
   return md.digest().toHex();
 }
 
-export async function pickTransferFile() {
+const IMAGE_FILE_PATTERN = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
+
+export const isImageTransferFile = (file) => {
+  const mimeType = String(file?.mimeType || '').toLowerCase();
+  const fileName = String(file?.fileName || file?.name || file?.uri || '');
+  return mimeType.startsWith('image/') || IMAGE_FILE_PATTERN.test(fileName);
+};
+
+export async function pickTransferFile(options = {}) {
+  const pickerType = options?.type || '*/*';
   const result = await DocumentPicker.getDocumentAsync({
-    type: '*/*',
+    type: pickerType,
     copyToCacheDirectory: true,
     multiple: false,
   });
@@ -124,6 +133,10 @@ export async function pickTransferFile() {
     fileSize,
     mimeType: asset.mimeType || 'application/octet-stream',
   };
+}
+
+export async function pickTransferImage() {
+  return pickTransferFile({ type: 'image/*' });
 }
 
 export async function prepareOutgoingFile(file) {

@@ -3,11 +3,12 @@ const packageJson = require('./package.json');
 module.exports = {
   expo: {
     name: 'OpenX Mobile',
-    slug: 'openx-mobile',
+    slug: 'openxmobile',
     version: packageJson.version,
     orientation: 'portrait',
     icon: './assets/logo.png',
     userInterfaceStyle: 'dark',
+
     plugins: [
       [
         'expo-build-properties',
@@ -32,6 +33,7 @@ module.exports = {
       'expo-sharing',
       './plugins/withOpenXNotificationListener'
     ],
+
     android: {
       package: 'com.openx.mobile',
       softwareKeyboardLayoutMode: 'resize',
@@ -45,15 +47,17 @@ module.exports = {
         'android.permission.POST_NOTIFICATIONS'
       ]
     },
-    extra: {
-      eas: {
-        projectId: 'a47c13bd-78f2-43f7-a225-c97ce99f417c'
-      }
-    },
+
     ios: {
       bundleIdentifier: 'com.openx.mobile',
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false
+      }
+    },
+
+    extra: {
+      eas: {
+        projectId: '36f7718d-5153-4915-889f-09613b0a433b'
       }
     }
   }
