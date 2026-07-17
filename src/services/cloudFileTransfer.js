@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import forge from 'node-forge/lib/forge';
 import {
   MAX_FILE_SIZE,
   createTransferRecord,
@@ -37,7 +38,8 @@ const sanitizeIncomingFileName = (value) => {
 };
 
 async function hashBase64Chunk(base64) {
-  const bytes = Uint8Array.from(atob(base64 || ''), (character) => character.charCodeAt(0));
+  const binary = forge.util.decode64(base64 || '');
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0) & 0xff);
   const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
