@@ -1,0 +1,9 @@
+export { default as RecoveryManager } from './RecoveryManager';
+export { default as RegistrationPinManager } from './RegistrationPinManager';
+export { default as SecurityClient } from './SecurityClient';
+export { default as SecurityEvents } from './SecurityEvents';
+export { default as SecurityLogger } from './SecurityLogger';
+export { default as SecurityManager } from './SecurityManager';
+export { default as SecurityPolicyManager } from './SecurityPolicyManager';
+export { default as SessionManager } from './SessionManager';
+export { default as TrustManager } from './TrustManager';
