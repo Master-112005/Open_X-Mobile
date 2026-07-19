@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
+import SegmentedSlider from '../components/SegmentedSlider';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
@@ -23,6 +24,13 @@ const PERMISSION_ITEMS = [
   { key: 'fileTransfer', label: 'File transfer' },
   { key: 'receiveFiles', label: 'Receive files' },
   { key: 'sendFiles', label: 'Send files' },
+];
+
+const SETTINGS_TABS = [
+  { label: 'System', value: 'system' },
+  { label: 'Profile', value: 'profile' },
+  { label: 'Mobile', value: 'mobile' },
+  { label: 'Modes', value: 'modes' },
 ];
 
 function HeaderButton({ accessibilityLabel, iconName, onPress }) {
@@ -50,6 +58,7 @@ export default function SettingsScreen({ navigation }) {
   } = useApp();
   const [phoneName, setPhoneName] = useState(deviceName);
   const [savingName, setSavingName] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('system');
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
@@ -105,76 +114,115 @@ export default function SettingsScreen({ navigation }) {
             <Text style={styles.subtitle}>Manage pairing and connection behavior.</Text>
           </View>
 
-          <GlassPanel style={styles.summaryCard} contentStyle={styles.summaryContent}>
-            <View style={styles.summaryMain}>
-              <View style={styles.summaryIcon}>
-                <Ionicons color={colors.text} name="phone-portrait-outline" size={22} />
-              </View>
-              <View style={styles.summaryText}>
-                <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
-                <Text style={styles.summaryMeta}>Cloud relay</Text>
-              </View>
-            </View>
-            <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
-              <View style={[styles.summaryDot, activeConnected ? styles.summaryDotOn : styles.summaryDotOff]} />
-              <Text style={styles.summaryStatusText}>{activeStatusText || 'offline'}</Text>
-            </View>
-          </GlassPanel>
+          <SegmentedSlider
+            accessibilityLabel="Settings sections"
+            onChange={setSettingsTab}
+            options={SETTINGS_TABS}
+            segmentStyle={styles.settingsSegment}
+            style={styles.settingsSlider}
+            textStyle={styles.settingsSegmentText}
+            value={settingsTab}
+          />
 
-          <Text style={styles.sectionTitle}>Mobile name</Text>
-          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            <Text style={styles.label}>Mobile name</Text>
-            <TextInput
-              autoCapitalize="words"
-              autoCorrect={false}
-              maxLength={100}
-              onChangeText={setPhoneName}
-              placeholder="My Mobile"
-              placeholderTextColor={colors.textMuted}
-              returnKeyType="done"
-              style={styles.input}
-              value={phoneName}
-            />
-            <GlassButton
-              disabled={savingName || phoneName.trim().length === 0}
-              iconName="phone-portrait-outline"
-              label="Save Name"
-              loading={savingName}
-              onPress={handleSaveDeviceName}
-              style={styles.nameButton}
-            />
-          </GlassPanel>
+          {settingsTab === 'system' ? (
+            <>
+              <GlassPanel style={styles.summaryCard} contentStyle={styles.summaryContent}>
+                <View style={styles.summaryMain}>
+                  <View style={styles.summaryIcon}>
+                    <Ionicons color={colors.text} name="phone-portrait-outline" size={22} />
+                  </View>
+                  <View style={styles.summaryText}>
+                    <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
+                    <Text style={styles.summaryMeta}>Cloud relay</Text>
+                  </View>
+                </View>
+                <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
+                  <View style={[styles.summaryDot, activeConnected ? styles.summaryDotOn : styles.summaryDotOff]} />
+                  <Text style={styles.summaryStatusText}>{activeStatusText || 'offline'}</Text>
+                </View>
+              </GlassPanel>
 
-          <Text style={styles.sectionTitle}>Desktop permissions</Text>
-          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            {permissionsLoaded ? (
-              <View style={styles.permissionList}>
-                {PERMISSION_ITEMS.map((item) => {
-                  const allowed = permissions[item.key];
-                  return (
-                    <View key={item.key} style={styles.permissionRow}>
-                      <Text style={styles.permissionLabel}>{item.label}</Text>
-                      <View style={[styles.permissionDot, allowed ? styles.allowed : styles.denied]} />
-                    </View>
-                  );
-                })}
+              <Text style={styles.sectionTitle}>Desktop permissions</Text>
+              <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+                {permissionsLoaded ? (
+                  <View style={styles.permissionList}>
+                    {PERMISSION_ITEMS.map((item) => {
+                      const allowed = permissions[item.key];
+                      return (
+                        <View key={item.key} style={styles.permissionRow}>
+                          <Text style={styles.permissionLabel}>{item.label}</Text>
+                          <View style={[styles.permissionDot, allowed ? styles.allowed : styles.denied]} />
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <ActivityIndicator color={colors.text} style={styles.loader} />
+                )}
+                <Text style={styles.updatedText}>
+                  {permissionsLastUpdated
+                    ? `Updated ${new Date(permissionsLastUpdated).toLocaleString()}`
+                    : 'Waiting for desktop permission state'}
+                </Text>
+              </GlassPanel>
+            </>
+          ) : null}
+
+          {settingsTab === 'mobile' ? (
+            <>
+              <Text style={styles.sectionTitle}>Mobile name</Text>
+              <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+                <Text style={styles.label}>Mobile name</Text>
+                <TextInput
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                  maxLength={100}
+                  onChangeText={setPhoneName}
+                  placeholder="My Mobile"
+                  placeholderTextColor={colors.textMuted}
+                  returnKeyType="done"
+                  style={styles.input}
+                  value={phoneName}
+                />
+                <GlassButton
+                  disabled={savingName || phoneName.trim().length === 0}
+                  iconName="phone-portrait-outline"
+                  label="Save Name"
+                  loading={savingName}
+                  onPress={handleSaveDeviceName}
+                  style={styles.nameButton}
+                />
+              </GlassPanel>
+            </>
+          ) : null}
+
+          {settingsTab === 'profile' ? (
+            <GlassPanel style={styles.summaryCard} contentStyle={styles.cardContent}>
+              <View style={styles.profilePrompt}>
+                <View style={styles.summaryIcon}>
+                  <Ionicons color={colors.text} name="person-circle-outline" size={22} />
+                </View>
+                <View style={styles.summaryText}>
+                  <Text style={styles.summaryName}>Profile</Text>
+                  <Text style={styles.summaryMeta}>Manage local identity fields.</Text>
+                </View>
               </View>
-            ) : (
-              <ActivityIndicator color={colors.text} style={styles.loader} />
-            )}
-            <Text style={styles.updatedText}>
-              {permissionsLastUpdated
-                ? `Updated ${new Date(permissionsLastUpdated).toLocaleString()}`
-                : 'Waiting for desktop permission state'}
-            </Text>
-          </GlassPanel>
+              <GlassButton
+                iconName="person-circle-outline"
+                label="Open Profile"
+                onPress={() => navigation.navigate('Profile')}
+                style={styles.nameButton}
+              />
+            </GlassPanel>
+          ) : null}
 
-          <Text style={styles.sectionTitle}>Advanced connection</Text>
-          <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-            <Text style={styles.advancedText}>
-              OpenX Mobile uses cloud pairing and the secure relay for commands, notifications, schedules, and file transfers.
-            </Text>
-          </GlassPanel>
+          {settingsTab === 'modes' ? (
+            <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
+              <Text style={styles.advancedText}>
+                OpenX Mobile uses cloud pairing and the secure relay for commands, schedules, and file transfers.
+              </Text>
+            </GlassPanel>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -214,7 +262,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   titleBlock: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   title: {
     color: colors.text,
@@ -227,6 +275,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 18,
+  },
+  settingsSlider: {
+    marginBottom: spacing.lg,
+    minHeight: 52,
+  },
+  settingsSegment: {
+    height: 44,
+    paddingHorizontal: spacing.xs,
+  },
+  settingsSegmentText: {
+    fontSize: 12,
   },
   summaryCard: {
     borderRadius: radius.lg,
@@ -258,6 +317,11 @@ const styles = StyleSheet.create({
   summaryText: {
     flex: 1,
     minWidth: 0,
+  },
+  profilePrompt: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
   },
   summaryName: {
     color: colors.text,

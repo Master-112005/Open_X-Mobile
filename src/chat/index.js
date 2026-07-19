@@ -13,6 +13,7 @@ export { default as ChatProvider, useChatContext } from './ChatProvider';
 export { default as ChatStatusManager } from './ChatStatusManager';
 export { default as ChatStorage } from './ChatStorage';
 export { default as ChatVersionManager } from './ChatVersionManager';
+export * as Accounts from './accounts';
 export * as Devices from './devices';
 export * as Crypto from './crypto';
 export * as Discovery from './discovery';

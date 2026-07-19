@@ -7,7 +7,7 @@ export class DiscoveryConfiguration {
    * @param {object} options Configuration overrides.
    */
   constructor(options = {}) {
-    this.apiBaseUrl = String(options.apiBaseUrl || 'http://localhost:8090').replace(/\/+$/, '');
+    this.apiBaseUrl = String(options.apiBaseUrl || 'https://openx-chat-server.onrender.com').replace(/\/+$/, '');
     this.requestTimeoutMs = Number(options.requestTimeoutMs || 15000);
     this.defaultCountryCode = options.defaultCountryCode || null;
     this.validate();

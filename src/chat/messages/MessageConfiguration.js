@@ -7,10 +7,11 @@ export class MessageConfiguration {
    * @param {object} options Overrides.
    */
   constructor(options = {}) {
-    this.apiBaseUrl = String(options.apiBaseUrl || 'http://localhost:8090').replace(/\/+$/, '');
+    this.apiBaseUrl = String(options.apiBaseUrl || 'https://openx-chat-server.onrender.com').replace(/\/+$/, '');
     this.protocolVersion = String(options.protocolVersion || '1');
     this.maxMessageSizeBytes = Number(options.maxMessageSizeBytes || 65536);
     this.compressionThresholdBytes = Number(options.compressionThresholdBytes || 1024);
+    this.requestTimeoutMs = Number(options.requestTimeoutMs || 15000);
     this.maxQueueSize = Number(options.maxQueueSize || 1000);
     this.maxRetries = Number(options.maxRetries || 5);
     this.retryBaseDelayMs = Number(options.retryBaseDelayMs || 1000);
@@ -33,6 +34,7 @@ export class MessageConfiguration {
   validate() {
     if (this.maxMessageSizeBytes < 1) throw new Error('Message maximum size must be positive.');
     if (this.compressionThresholdBytes < 0) throw new Error('Message compression threshold is invalid.');
+    if (this.requestTimeoutMs < 1000) throw new Error('Message request timeout is too small.');
     if (this.maxRetries < 0) throw new Error('Message retry max must be >= 0.');
     if (!this.supportedTypes.every((type) => ['Text', 'Emoji'].includes(type))) throw new Error('Only Text and Emoji are enabled in Phase 8.');
   }

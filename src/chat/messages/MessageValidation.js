@@ -25,7 +25,7 @@ export class MessageValidation {
       senderAccountId: this.accountId(input.senderAccountId),
       senderDeviceId: this.deviceId(input.senderDeviceId),
       recipientAccountId: this.accountId(input.recipientAccountId),
-      recipientDeviceId: this.deviceId(input.recipientDeviceId),
+      recipientDeviceId: input.recipientDeviceId ? this.deviceId(input.recipientDeviceId) : null,
       messageType,
       plaintext,
       metadata: this.metadata(input.metadata),

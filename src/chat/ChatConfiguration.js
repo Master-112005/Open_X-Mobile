@@ -7,7 +7,7 @@ export class ChatConfiguration {
    * @param {object} options Configuration overrides.
    */
   constructor(options = {}) {
-    this.serverUrl = String(options.serverUrl || 'ws://localhost:8090/ws').trim();
+    this.serverUrl = String(options.serverUrl || 'wss://openx-chat-server.onrender.com/ws').trim();
     this.protocolVersion = String(options.protocolVersion || '1');
     this.heartbeatIntervalMs = this.number(options.heartbeatIntervalMs, 30000);
     this.heartbeatTimeoutMs = this.number(options.heartbeatTimeoutMs, 10000);
@@ -17,10 +17,9 @@ export class ChatConfiguration {
     this.maxReconnectAttempts = this.number(options.maxReconnectAttempts, Infinity);
     this.backgroundReady = options.backgroundReady === true;
     this.featureFlags = Object.freeze({
-      authentication: false,
+      authentication: true,
       encryption: false,
       messaging: true,
-      notifications: false,
       push: false,
       synchronization: true,
       multiDevice: true,

@@ -18,7 +18,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatBubble from '../components/ChatBubble';
+import SegmentedSlider from '../components/SegmentedSlider';
 import { useApp } from '../context/AppContext';
+import MobileChatPanel from './MobileChatPanel';
 import {
   formatFileSize,
   isImageTransferFile,
@@ -27,21 +29,18 @@ import {
 import { parseMobileScheduleCommand } from '../services/mobileScheduleIntelligence';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
-function FloatingButton({ iconName, label, onPress, accessibilityLabel }) {
-  return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel || label}
-      accessibilityRole="button"
-      hitSlop={8}
-      onPress={onPress}
-      style={({ pressed }) => [styles.floatButton, pressed && styles.floatPressed]}
-    >
-      <LinearGradient colors={gradients.glass} style={styles.floatGlass}>
-        <Ionicons color={colors.text} name={iconName} size={22} />
-      </LinearGradient>
-    </Pressable>
-  );
-}
+const WORKSPACE_OPTIONS = [
+  { label: 'Assistant', value: 'assistant' },
+  { label: 'Chat', value: 'chat' },
+];
+
+const ACTION_OPTIONS = [
+  { label: 'Files', value: 'Transfers', iconName: 'folder-open-outline', showLabel: false },
+  { label: 'Calendar', value: 'Calendar', iconName: 'calendar-outline', showLabel: false },
+  { label: 'Pair', value: 'QRPairing', iconName: 'qr-code-outline', showLabel: false },
+  { label: 'Profile', value: 'Profile', iconName: 'person-circle-outline', showLabel: false },
+  { label: 'Settings', value: 'Settings', iconName: 'settings-outline', showLabel: false },
+];
 
 function ConnectionDot({ status, onReconnect }) {
   const online = status === 'connected';
@@ -93,6 +92,7 @@ export default function HomeScreen({ navigation }) {
     connectionStatus,
     connectionMode,
     cloudStatus,
+    deviceName,
     paired,
     pairingLoaded,
     permissions,
@@ -109,10 +109,15 @@ export default function HomeScreen({ navigation }) {
   const [imagePreview, setImagePreview] = useState(null);
   const [selectingFile, setSelectingFile] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
+  const [workspace, setWorkspace] = useState('assistant');
+  const [actionValue, setActionValue] = useState('');
   const listRef = useRef(null);
   const scrollFrameRef = useRef(null);
   const insets = useSafeAreaInsets();
-  const topControlsHeight = insets.top + spacing.sm + 58 + spacing.lg;
+  const bottomInset = Math.max(insets.bottom, spacing.sm);
+  const bottomActionHeight = bottomInset + 58 + spacing.sm;
+  const assistantDockHeight = bottomActionHeight + 58 + spacing.sm;
+  const topControlsHeight = insets.top + spacing.sm + 54 + spacing.lg;
   const activeConnectionStatus = connectionMode === 'cloud'
     ? cloudStatus?.state
     : connectionStatus;
@@ -229,6 +234,13 @@ export default function HomeScreen({ navigation }) {
     });
   }, [reconnectActiveConnection, showNotice]);
 
+  const handleAction = useCallback((route) => {
+    if (!route) return;
+    setActionValue(route);
+    navigation.navigate(route);
+    requestAnimationFrame(() => setActionValue(''));
+  }, [navigation]);
+
   return (
     <View style={styles.screen}>
       <KeyboardAvoidingView
@@ -237,142 +249,146 @@ export default function HomeScreen({ navigation }) {
         style={styles.screen}
       >
         <View style={[styles.topLayer, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
-          <LinearGradient colors={gradients.glass} style={styles.topControlBar} pointerEvents="auto">
-            <View style={styles.leftCluster}>
-              <FloatingButton
-                accessibilityLabel="Open received files"
-                iconName="folder-open-outline"
-                label="Files"
-                onPress={() => navigation.navigate('Transfers')}
-              />
-              <ConnectionDot status={activeConnectionStatus} onReconnect={handleReconnect} />
-            </View>
-            <View style={styles.rightCluster}>
-              <FloatingButton
-                accessibilityLabel="Open calendar"
-                iconName="calendar-outline"
-                label="Calendar"
-                onPress={() => navigation.navigate('Calendar')}
-              />
-              <FloatingButton
-                accessibilityLabel="Open QR scanner"
-                iconName="qr-code-outline"
-                label="QR scanner"
-                onPress={() => navigation.navigate('QRPairing')}
-              />
-              <FloatingButton
-                accessibilityLabel="Open profile"
-                iconName="person-circle-outline"
-                label="Profile"
-                onPress={() => navigation.navigate('Profile')}
-              />
-              <FloatingButton
-                accessibilityLabel="Open settings"
-                iconName="settings-outline"
-                label="Settings"
-                onPress={() => navigation.navigate('Settings')}
-              />
-            </View>
-          </LinearGradient>
+          <View style={styles.modeRow} pointerEvents="auto">
+            <SegmentedSlider
+              accessibilityLabel="OpenX mobile mode"
+              onChange={setWorkspace}
+              options={WORKSPACE_OPTIONS}
+              style={styles.modeSlider}
+              value={workspace}
+            />
+            <ConnectionDot status={activeConnectionStatus} onReconnect={handleReconnect} />
+          </View>
         </View>
 
-        <FlatList
-          contentContainerStyle={[
-            styles.listContent,
-            { paddingTop: topControlsHeight + spacing.md, paddingBottom: spacing.xl },
-          ]}
-          data={messages}
-          initialNumToRender={14}
-          keyExtractor={keyMessage}
-          keyboardDismissMode="interactive"
-          keyboardShouldPersistTaps="handled"
-          maxToRenderPerBatch={8}
-          onContentSizeChange={scrollToNewest}
-          onLayout={scrollToNewest}
-          ref={listRef}
-          removeClippedSubviews={Platform.OS === 'android'}
-          renderItem={renderMessage}
-          showsVerticalScrollIndicator={false}
-          style={styles.list}
-          updateCellsBatchingPeriod={48}
-          windowSize={9}
-        />
-
-        <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-          <LinearGradient colors={gradients.glass} style={styles.composer}>
-            <Pressable
-              accessibilityLabel="Add file"
-              accessibilityRole="button"
-              disabled={selectingFile || sendingFile}
-              onPress={handlePickFile}
-              style={({ pressed }) => [
-                styles.addButton,
-                pressed && styles.smallPressed,
-                (selectingFile || sendingFile) && styles.disabled,
+        {workspace === 'assistant' ? (
+          <>
+            <FlatList
+              contentContainerStyle={[
+                styles.listContent,
+                { paddingTop: topControlsHeight + spacing.md, paddingBottom: assistantDockHeight + spacing.xl },
               ]}
-            >
-              <Ionicons color={colors.text} name="add" size={26} />
-            </Pressable>
-            <View style={styles.inputStack}>
-              {selectedFile ? (
-                <View style={styles.fileChip}>
-                  {selectedFileIsImage ? (
-                    <Image source={{ uri: selectedFile.uri }} style={styles.filePreview} />
-                  ) : (
-                    <View style={styles.fileIcon}>
-                      <Ionicons color={colors.textSecondary} name="document-outline" size={18} />
+              data={messages}
+              initialNumToRender={14}
+              keyExtractor={keyMessage}
+              keyboardDismissMode="interactive"
+              keyboardShouldPersistTaps="handled"
+              maxToRenderPerBatch={8}
+              onContentSizeChange={scrollToNewest}
+              onLayout={scrollToNewest}
+              ref={listRef}
+              removeClippedSubviews={Platform.OS === 'android'}
+              renderItem={renderMessage}
+              showsVerticalScrollIndicator={false}
+              style={styles.list}
+              updateCellsBatchingPeriod={48}
+              windowSize={9}
+            />
+          </>
+        ) : (
+          <MobileChatPanel
+            bottomPadding={bottomActionHeight + spacing.sm}
+            deviceName={deviceName}
+            showNotice={showNotice}
+            topPadding={topControlsHeight + spacing.md}
+          />
+        )}
+        {workspace === 'assistant' ? (
+          <View style={[styles.assistantDock, { paddingBottom: bottomInset }]}>
+            <LinearGradient colors={gradients.glass} style={styles.composer}>
+              <Pressable
+                accessibilityLabel="Add file"
+                accessibilityRole="button"
+                disabled={selectingFile || sendingFile}
+                onPress={handlePickFile}
+                style={({ pressed }) => [
+                  styles.addButton,
+                  pressed && styles.smallPressed,
+                  (selectingFile || sendingFile) && styles.disabled,
+                ]}
+              >
+                <Ionicons color={colors.text} name="add" size={26} />
+              </Pressable>
+              <View style={styles.inputStack}>
+                {selectedFile ? (
+                  <View style={styles.fileChip}>
+                    {selectedFileIsImage ? (
+                      <Image source={{ uri: selectedFile.uri }} style={styles.filePreview} />
+                    ) : (
+                      <View style={styles.fileIcon}>
+                        <Ionicons color={colors.textSecondary} name="document-outline" size={18} />
+                      </View>
+                    )}
+                    <View style={styles.fileText}>
+                      <Text numberOfLines={1} style={styles.fileName}>{selectedFile.fileName}</Text>
+                      <Text style={styles.fileSize}>{formatFileSize(selectedFile.fileSize)}</Text>
                     </View>
-                  )}
-                  <View style={styles.fileText}>
-                    <Text numberOfLines={1} style={styles.fileName}>{selectedFile.fileName}</Text>
-                    <Text style={styles.fileSize}>{formatFileSize(selectedFile.fileSize)}</Text>
+                    <Pressable
+                      accessibilityLabel="Remove selected file"
+                      accessibilityRole="button"
+                      disabled={sendingFile}
+                      onPress={() => setSelectedFile(null)}
+                      style={styles.clearFile}
+                    >
+                      <Ionicons color={colors.textSecondary} name="close" size={18} />
+                    </Pressable>
                   </View>
-                  <Pressable
-                    accessibilityLabel="Remove selected file"
-                    accessibilityRole="button"
-                    disabled={sendingFile}
-                    onPress={() => setSelectedFile(null)}
-                    style={styles.clearFile}
-                  >
-                    <Ionicons color={colors.textSecondary} name="close" size={18} />
-                  </Pressable>
-                </View>
-              ) : (
-                <TextInput
-                  accessibilityLabel="Message OpenX"
-                  editable
-                  maxLength={1000}
-                  multiline
-                  onChangeText={setText}
-                  onSubmitEditing={handleSend}
-                  placeholder={composerHint}
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="send"
-                  style={styles.input}
-                  submitBehavior="submit"
-                  value={text}
+                ) : (
+                  <TextInput
+                    accessibilityLabel="Message OpenX"
+                    editable
+                    maxLength={1000}
+                    multiline
+                    onChangeText={setText}
+                    onSubmitEditing={handleSend}
+                    placeholder={composerHint}
+                    placeholderTextColor={colors.textMuted}
+                    returnKeyType="send"
+                    style={styles.input}
+                    submitBehavior="submit"
+                    value={text}
+                  />
+                )}
+              </View>
+              <Pressable
+                accessibilityLabel={selectedFile ? 'Send file' : 'Send message'}
+                accessibilityRole="button"
+                disabled={selectedFile ? !canSendFile || sendingFile : !canSendText}
+                onPress={handleSend}
+                style={({ pressed }) => [
+                  styles.sendButton,
+                  pressed && styles.smallPressed,
+                  (selectedFile ? !canSendFile || sendingFile : !canSendText) && styles.disabled,
+                ]}
+              >
+                <Ionicons
+                  color={colors.text}
+                  name={selectedFile ? 'cloud-upload-outline' : 'send'}
+                  size={20}
                 />
-              )}
-            </View>
-            <Pressable
-              accessibilityLabel={selectedFile ? 'Send file' : 'Send message'}
-              accessibilityRole="button"
-              disabled={selectedFile ? !canSendFile || sendingFile : !canSendText}
-              onPress={handleSend}
-              style={({ pressed }) => [
-                styles.sendButton,
-                pressed && styles.smallPressed,
-                (selectedFile ? !canSendFile || sendingFile : !canSendText) && styles.disabled,
-              ]}
-            >
-              <Ionicons
-                color={colors.text}
-                name={selectedFile ? 'cloud-upload-outline' : 'send'}
-                size={20}
-              />
-            </Pressable>
-          </LinearGradient>
-        </View>
+              </Pressable>
+            </LinearGradient>
+            <SegmentedSlider
+              accessibilityLabel="OpenX mobile navigation"
+              onChange={handleAction}
+              options={ACTION_OPTIONS}
+              segmentStyle={styles.actionSegment}
+              style={styles.actionSlider}
+              value={actionValue}
+            />
+          </View>
+        ) : (
+          <View style={[styles.actionDock, { paddingBottom: bottomInset }]}>
+            <SegmentedSlider
+              accessibilityLabel="OpenX mobile navigation"
+              onChange={handleAction}
+              options={ACTION_OPTIONS}
+              segmentStyle={styles.actionSegment}
+              style={styles.actionSlider}
+              value={actionValue}
+            />
+          </View>
+        )}
       </KeyboardAvoidingView>
       <Modal
         animationType="fade"
@@ -426,40 +442,22 @@ const styles = StyleSheet.create({
     top: 0,
     zIndex: 20,
   },
-  topControlBar: {
-    ...shadows.card,
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 58,
-    padding: 5,
-  },
-  leftCluster: {
+  modeRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.sm,
+    marginBottom: spacing.sm,
   },
-  rightCluster: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  floatButton: {
-    borderRadius: radius.round,
-    height: 46,
-    overflow: 'hidden',
-    width: 46,
-  },
-  floatGlass: {
-    ...shadows.card,
-    alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
+  modeSlider: {
     flex: 1,
-    justifyContent: 'center',
+    minHeight: 54,
+  },
+  actionSlider: {
+    minHeight: 50,
+  },
+  actionSegment: {
+    height: 42,
+    paddingHorizontal: 4,
   },
   floatPressed: {
     opacity: 0.82,
@@ -498,10 +496,26 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingHorizontal: spacing.lg,
   },
-  composerWrap: {
+  assistantDock: {
     backgroundColor: colors.background,
+    bottom: 0,
+    gap: spacing.sm,
+    left: 0,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
+    position: 'absolute',
+    right: 0,
+    zIndex: 24,
+  },
+  actionDock: {
+    backgroundColor: colors.background,
+    bottom: 0,
+    left: 0,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    position: 'absolute',
+    right: 0,
+    zIndex: 24,
   },
   composer: {
     ...shadows.card,

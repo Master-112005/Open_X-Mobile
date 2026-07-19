@@ -24,7 +24,6 @@ export const ChatEvents = Object.freeze({
   FUTURE_PUSH: 'mobile.chat.future.push',
   FUTURE_SYNCHRONIZATION: 'mobile.chat.future.synchronization',
   FUTURE_MESSAGING: 'mobile.chat.future.messaging',
-  FUTURE_NOTIFICATIONS: 'mobile.chat.future.notifications',
   FUTURE_AUTHENTICATION: 'mobile.chat.future.authentication',
   FUTURE_ENCRYPTION: 'mobile.chat.future.encryption'
 });

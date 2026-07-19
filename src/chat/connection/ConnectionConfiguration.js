@@ -4,7 +4,7 @@
 export class ConnectionConfiguration {
   /** @param {object} options Overrides. */
   constructor(options = {}) {
-    this.apiBaseUrl = String(options.apiBaseUrl || 'http://localhost:8090').replace(/\/+$/, '');
+    this.apiBaseUrl = String(options.apiBaseUrl || 'https://openx-chat-server.onrender.com').replace(/\/+$/, '');
     this.heartbeatIntervalMs = this.number(options.heartbeatIntervalMs, 30000);
     this.heartbeatTimeoutMs = this.number(options.heartbeatTimeoutMs, 10000);
     this.reconnectMinDelayMs = this.number(options.reconnectMinDelayMs, 1000);

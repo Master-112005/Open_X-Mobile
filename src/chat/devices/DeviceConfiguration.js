@@ -7,7 +7,7 @@ export class DeviceConfiguration {
    * @param {object} options Overrides.
    */
   constructor(options = {}) {
-    this.apiBaseUrl = String(options.apiBaseUrl || 'http://localhost:8090').replace(/\/+$/, '');
+    this.apiBaseUrl = String(options.apiBaseUrl || 'https://openx-chat-server.onrender.com').replace(/\/+$/, '');
     this.accountId = options.accountId || null;
     this.autoRegister = options.autoRegister !== false;
     this.deviceName = options.deviceName || 'OpenX Mobile';
@@ -16,7 +16,7 @@ export class DeviceConfiguration {
     this.applicationVersion = options.applicationVersion || '0.1.0';
     this.operatingSystem = options.operatingSystem || 'Mobile';
     this.deviceType = options.deviceType || 'Mobile';
-    this.capabilities = Object.freeze(options.capabilities || ['pushNotifications', 'backgroundWake', 'batteryOptimization', 'foregroundService']);
+    this.capabilities = Object.freeze(options.capabilities || ['backgroundWake', 'batteryOptimization', 'foregroundService']);
     this.storageRoot = options.storageRoot || '@openx-chat/device';
     this.requestTimeoutMs = Number(options.requestTimeoutMs || 15000);
     this.validate();

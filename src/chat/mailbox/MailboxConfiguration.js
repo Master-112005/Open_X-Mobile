@@ -7,7 +7,7 @@ export class MailboxConfiguration {
    * @param {object} options Configuration overrides.
    */
   constructor(options = {}) {
-    this.apiBaseUrl = String(options.apiBaseUrl || 'http://localhost:8090').replace(/\/+$/, '');
+    this.apiBaseUrl = String(options.apiBaseUrl || 'https://openx-chat-server.onrender.com').replace(/\/+$/, '');
     this.requestTimeoutMs = Number(options.requestTimeoutMs || 15000);
     this.maxEnvelopeSizeBytes = Number(options.maxEnvelopeSizeBytes || 262144);
     this.sequenceStorageKey = options.sequenceStorageKey || '@openx-chat/mailbox-sequences';

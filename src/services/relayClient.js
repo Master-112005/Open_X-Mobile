@@ -1,6 +1,6 @@
 import packageJson from '../../package.json';
 import * as Network from 'expo-network';
-import { SecurePacketChannel, decryptJson, encryptJson } from './e2ee';
+import { SecurePacketChannel, decryptJson } from './e2ee';
 
 const CONNECTION_STATES = new Set([
   'disconnected',
@@ -118,7 +118,6 @@ class RelayClient {
   device = null;
   owner = null;
   presence = [];
-  notifications = [];
   auth = null;
   secureChannel = new SecurePacketChannel();
   reliability = {
@@ -143,7 +142,6 @@ class RelayClient {
   statusListeners = new Set();
   relayListeners = new Set();
   presenceListeners = new Set();
-  notificationListeners = new Set();
   networkStatus = { online: null, connected: null, internetReachable: null, type: 'unknown' };
   networkSubscription = null;
 
@@ -304,7 +302,6 @@ class RelayClient {
         this.device = null;
         this.owner = null;
         this.presence = [];
-        this.notifications = [];
         this.auth = null;
         this.rejectPendingPairing(new Error('Cloud connection closed.'));
         if (this.manuallyDisconnected || this.status === 'disconnecting') {
@@ -347,7 +344,6 @@ class RelayClient {
     this.device = null;
     this.owner = null;
     this.presence = [];
-    this.notifications = [];
     this.auth = null;
     this.setStatus('disconnected');
     return Promise.resolve(this.getStatus({ reason }));
@@ -366,7 +362,6 @@ class RelayClient {
   destroy() {
     this.statusListeners.clear();
     this.presenceListeners.clear();
-    this.notificationListeners.clear();
     this.networkSubscription?.remove?.();
     this.networkSubscription = null;
     return this.disconnect('destroy');
@@ -400,7 +395,6 @@ class RelayClient {
       device: this.device,
       owner: this.owner,
       presence: [...this.presence],
-      notifications: [...this.notifications],
       reliability: this.getReliabilityStatus(),
       network: { ...this.networkStatus },
       authenticated: Boolean(this.auth?.accessToken),
@@ -501,92 +495,6 @@ class RelayClient {
     return this.send({
       type: 'presence:list',
       requestId: `mobile-presence-list-${Date.now()}`,
-    });
-  }
-
-  createNotification(payload = {}) {
-    const protectedPayload = this.protectNotificationPayload(payload);
-    return this.send({
-      ...protectedPayload,
-      type: 'notification:create',
-      requestId: payload.requestId || createRequestId('mobile-notification-create'),
-    });
-  }
-
-  protectNotificationPayload(payload = {}) {
-    if (!this.secureChannel.hasKey()) return payload;
-    const notificationId = String(payload.notificationId || '').trim();
-    const destinationDeviceId = String(payload.destinationDeviceId || '').trim();
-    const sourceDeviceId = String(this.device?.deviceId || this.deviceIdentity.deviceId || '').trim();
-    const ownerId = String(this.device?.ownerId || this.owner?.id || this.deviceIdentity.ownerId || '').trim();
-    if (!notificationId || !destinationDeviceId || !sourceDeviceId || !ownerId) return payload;
-    try {
-      const details = payload.details && typeof payload.details === 'object' ? payload.details : {};
-      const content = {
-        appName: details.appName || payload.appName || '',
-        packageName: details.packageName || payload.packageName || '',
-        title: payload.title || '',
-        message: payload.message || '',
-        details,
-        category: payload.category || 'phone',
-        priority: payload.priority || 'normal',
-        timestamp: details.timestamp || payload.timestamp || Date.now(),
-        repeatCount: details.repeatCount || payload.repeatCount || 1,
-      };
-      const envelope = encryptJson(this.secureChannel.masterKey, content, {
-        domain: 'phone-notification',
-        context: { ownerId, sourceDeviceId, destinationDeviceId, notificationId },
-        aad: { ownerId, sourceDeviceId, destinationDeviceId, notificationId },
-      });
-      return {
-        ...payload,
-        title: 'Encrypted phone notification',
-        message: 'OpenX protected this notification.',
-        details: {
-          encrypted: true,
-          source: 'openx-mobile',
-          deviceName: details.deviceName || this.deviceIdentity.deviceName || 'OpenX Mobile',
-          timestamp: content.timestamp,
-          repeatCount: content.repeatCount,
-        },
-        encryptedContent: {
-          encrypted: true,
-          scheme: envelope.scheme,
-          envelope,
-        },
-      };
-    } catch {
-      return payload;
-    }
-  }
-
-  requestNotificationList() {
-    return this.send({
-      type: 'notification:list',
-      requestId: createRequestId('mobile-notification-list'),
-    });
-  }
-
-  markNotificationRead(notificationId) {
-    return this.send({
-      type: 'notification:read',
-      requestId: createRequestId('mobile-notification-read'),
-      notificationId,
-    });
-  }
-
-  dismissNotification(notificationId) {
-    return this.send({
-      type: 'notification:dismiss',
-      requestId: createRequestId('mobile-notification-dismiss'),
-      notificationId,
-    });
-  }
-
-  clearNotifications() {
-    return this.send({
-      type: 'notification:clear',
-      requestId: createRequestId('mobile-notification-clear'),
     });
   }
 
@@ -705,12 +613,6 @@ class RelayClient {
     return () => this.presenceListeners.delete(listener);
   }
 
-  subscribeToNotifications(listener) {
-    this.notificationListeners.add(listener);
-    listener([...this.notifications]);
-    return () => this.notificationListeners.delete(listener);
-  }
-
   handleMessage(rawMessage) {
     try {
       const message = JSON.parse(rawMessage);
@@ -731,7 +633,6 @@ class RelayClient {
         this.reliability.state = 'healthy';
         this.reliability.sessionRestoreCount += 1;
         this.subscribePresence();
-        this.requestNotificationList();
         this.flushRetryQueue();
         this.emitStatus();
         return;
@@ -804,42 +705,6 @@ class RelayClient {
       if (message.type === 'presence:list' || message.type === 'presence:subscribed') {
         this.presence = Array.isArray(message.presence) ? message.presence : [];
         this.emitPresence();
-        this.emitStatus();
-        return;
-      }
-      if (message.type === 'notification:new') {
-        this.upsertNotification(message.notification);
-        this.emitNotifications();
-        this.emitStatus();
-        return;
-      }
-      if (message.type === 'notification:list') {
-        this.notifications = Array.isArray(message.notifications) ? message.notifications : [];
-        this.emitNotifications();
-        this.emitStatus();
-        return;
-      }
-      if (
-        message.type === 'notification:read' ||
-        message.type === 'notification:dismiss' ||
-        message.type === 'notification:queued'
-      ) {
-        if (message.notification) this.upsertNotification(message.notification);
-        this.emitNotifications();
-        this.emitStatus();
-        return;
-      }
-      if (message.type === 'notification:deleted') {
-        this.notifications = this.notifications.filter(
-          (item) => item.notificationId !== message.notificationId,
-        );
-        this.emitNotifications();
-        this.emitStatus();
-        return;
-      }
-      if (message.type === 'notification:cleared') {
-        this.notifications = [];
-        this.emitNotifications();
         this.emitStatus();
         return;
       }
@@ -921,34 +786,11 @@ class RelayClient {
     return true;
   }
 
-  upsertNotification(notification) {
-    if (!notification?.notificationId) return false;
-    const index = this.notifications.findIndex((item) => item.notificationId === notification.notificationId);
-    if (index >= 0) this.notifications[index] = { ...this.notifications[index], ...notification };
-    else this.notifications.unshift(notification);
-    const weights = { low: 0, normal: 1, high: 2, critical: 3 };
-    this.notifications.sort((left, right) => (
-      (weights[right.priority] || 0) - (weights[left.priority] || 0) ||
-      Number(right.createdAt || 0) - Number(left.createdAt || 0)
-    ));
-    this.notifications = this.notifications.slice(0, 100);
-    return true;
-  }
-
   emitPresence() {
     const presence = [...this.presence];
     this.presenceListeners.forEach((listener) => {
       try {
         listener(presence);
-      } catch {}
-    });
-  }
-
-  emitNotifications() {
-    const notifications = [...this.notifications];
-    this.notificationListeners.forEach((listener) => {
-      try {
-        listener(notifications);
       } catch {}
     });
   }
