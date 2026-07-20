@@ -23,6 +23,7 @@ export class MessageStorage {
     const raw = await this.storage.getItem(this.config.storageKey);
     try {
       this.state = raw ? this.normalize(JSON.parse(raw)) : this.empty();
+      this.pruneMessages();
     } catch {
       this.state = this.empty();
       await this.storage.removeItem(this.config.storageKey);
@@ -73,6 +74,21 @@ export class MessageStorage {
     else this.state.messages.push(message);
     await this.setStatus(message.messageId, message.status, false);
     await this.persist();
+  }
+
+  /**
+   * Prunes local message tables to the configured storage cap.
+   */
+  pruneMessages() {
+    const limit = Math.max(1, Math.floor(Number(this.config.maxStoredMessages) || 300));
+    const retainedMessages = this.state.messages.length > limit
+      ? this.state.messages.slice(-limit)
+      : this.state.messages;
+    const keepIds = new Set(retainedMessages.map((message) => message.messageId).filter(Boolean));
+    this.state.messages = retainedMessages;
+    ['messageStatus', 'readState', 'retryQueue', 'compressionMetadata', 'futureAttachmentPlaceholder', 'futureReactionPlaceholder'].forEach((key) => {
+      this.state[key] = this.state[key].filter((item) => keepIds.has(item.messageId));
+    });
   }
 
   /**
@@ -134,6 +150,7 @@ export class MessageStorage {
    * Persists local state.
    */
   persist() {
+    this.pruneMessages();
     return this.storage.setItem(this.config.storageKey, JSON.stringify(this.state));
   }
 }

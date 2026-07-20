@@ -13,6 +13,7 @@ export class MessageConfiguration {
     this.compressionThresholdBytes = Number(options.compressionThresholdBytes || 1024);
     this.requestTimeoutMs = Number(options.requestTimeoutMs || 15000);
     this.maxQueueSize = Number(options.maxQueueSize || 1000);
+    this.maxStoredMessages = Number(options.maxStoredMessages || 300);
     this.maxRetries = Number(options.maxRetries || 5);
     this.retryBaseDelayMs = Number(options.retryBaseDelayMs || 1000);
     this.retryMaxDelayMs = Number(options.retryMaxDelayMs || 60000);
@@ -35,6 +36,7 @@ export class MessageConfiguration {
     if (this.maxMessageSizeBytes < 1) throw new Error('Message maximum size must be positive.');
     if (this.compressionThresholdBytes < 0) throw new Error('Message compression threshold is invalid.');
     if (this.requestTimeoutMs < 1000) throw new Error('Message request timeout is too small.');
+    if (this.maxStoredMessages < 1) throw new Error('Message storage limit must be positive.');
     if (this.maxRetries < 0) throw new Error('Message retry max must be >= 0.');
     if (!this.supportedTypes.every((type) => ['Text', 'Emoji'].includes(type))) throw new Error('Only Text and Emoji are enabled in Phase 8.');
   }

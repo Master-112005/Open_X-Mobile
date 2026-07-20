@@ -69,7 +69,7 @@ const DEFAULT_CONNECTION_MODE = 'cloud';
 const PAIRING_TIMEOUT_MS = 15000;
 const CLOUD_COMMAND_TIMEOUT_MS = 60000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
-const MAX_MOBILE_CHAT_HISTORY = 250;
+const MAX_MOBILE_CHAT_HISTORY = 300;
 const MAX_MOBILE_MESSAGE_TEXT = 3000;
 const MAX_MOBILE_MESSAGE_DATA_BYTES = 20000;
 const isCloudFileTransferRequestId = (value) =>
@@ -1419,7 +1419,7 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timer);
   }, [cancelLocalScheduleNotification, markScheduleDirty, presentScheduleDueNotification, scheduleItems, schedulesLoaded, sendCloudScheduleSync]);
 
-  const handleLocalScheduleCommand = useCallback((normalizedText) => {
+  const handleLocalScheduleCommand = useCallback((normalizedText, options = {}) => {
     const parsed = parseMobileScheduleCommand(normalizedText);
     if (!parsed) return false;
     const now = new Date().toISOString();
@@ -1451,12 +1451,15 @@ export function AppProvider({ children }) {
       console.warn('Unable to schedule OpenX mobile alert.');
     });
     markScheduleDirty(schedule.id);
-    if (settingsRef.current.connectionMode === 'cloud') sendCloudScheduleSync('upsert', schedule);
+    if (options.syncNow === true) sendCloudScheduleSync('upsert', schedule);
 
+    const syncNote = options.offlineFallback === true
+      ? ' It will sync with OpenX Desktop when connected.'
+      : '';
     setMessages((current) => [
       ...current,
       createMessage('user', normalizedText),
-      createMessage('assistant', `${schedule.kind} set for ${formatScheduleDue(schedule.dueAt)}.`, Date.now(), {
+      createMessage('assistant', `${schedule.kind} set for ${formatScheduleDue(schedule.dueAt)}.${syncNote}`, Date.now(), {
         intent: `${String(schedule.kind).toLowerCase()}.set`,
         data: { schedule },
       }),
@@ -1468,18 +1471,17 @@ export function AppProvider({ children }) {
     (text) => {
       const normalizedText = text.trim();
       if (!normalizedText) return false;
-      if (handleLocalScheduleCommand(normalizedText)) return true;
       if (settingsRef.current.connectionMode === 'cloud') {
         const cloudPairing = pairingDataRef.current.cloudPairing || {};
         const requestId = Crypto.randomUUID();
         const packetId = `cloud_command_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-        if (
-          !relayClient.isConnected() ||
-          !pairingDataRef.current.paired ||
-          !cloudPairing.ownerId ||
-          !cloudPairing.desktopDeviceId ||
-          !pairingDataRef.current.deviceId
-        ) {
+        const cloudDesktopReady = relayClient.isConnected() &&
+          pairingDataRef.current.paired &&
+          cloudPairing.ownerId &&
+          cloudPairing.desktopDeviceId &&
+          pairingDataRef.current.deviceId;
+        if (!cloudDesktopReady) {
+          if (handleLocalScheduleCommand(normalizedText, { offlineFallback: true })) return true;
           setMessages((current) => [
             ...current,
             createMessage('user', normalizedText),
@@ -1540,11 +1542,12 @@ export function AppProvider({ children }) {
         }
         return true;
       }
-      if (
-        !normalizedText ||
-        !paired ||
-        !permissionsRef.current.remoteCommands
-      ) {
+
+      const localDesktopReady = websocketService.getStatus() === 'connected' &&
+        paired &&
+        permissionsRef.current.remoteCommands;
+      if (!localDesktopReady) {
+        if (handleLocalScheduleCommand(normalizedText, { offlineFallback: true })) return true;
         return false;
       }
 

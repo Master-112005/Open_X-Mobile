@@ -17,6 +17,7 @@ import {
 
 import SegmentedSlider from '../components/SegmentedSlider';
 import AccountService from '../chat/accounts/AccountService';
+import ChatConnectionManager from '../chat/ChatConnectionManager';
 import { fromBase64, text as decodeUtf8 } from '../chat/crypto/Encoding';
 import { colors, radius, shadows, spacing } from '../styles/theme';
 
@@ -26,7 +27,7 @@ const CHAT_MESSAGES_KEY = '@openx-mobile/chat/messages-v1';
 const CHAT_PINNED_KEY = '@openx-mobile/chat/pinned-v1';
 const CHAT_SYNC_KEY = '@openx-mobile/chat/sync-v1';
 const CHAT_DEVICE_KEY = '@openx-mobile/chat/device-key-v1';
-const MAX_RELATIONSHIP_MESSAGES = 200;
+const MAX_RELATIONSHIP_MESSAGES = 300;
 const CHAT_SYNC_INTERVAL_MS = 15000;
 const MESSAGE_RUNTIME_ERROR = 'Secure chat runtime is unavailable on this device build.';
 const CHAT_FILTERS = [
@@ -66,6 +67,15 @@ const normalizeServerUrl = (value) => {
   const url = String(value || DEFAULT_CHAT_API).trim().replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(url)) throw new Error('Server URL must start with http:// or https://.');
   return url;
+};
+
+const chatWebSocketUrl = (apiBaseUrl) => {
+  const url = new URL(normalizeServerUrl(apiBaseUrl));
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/ws';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 };
 
 const accountIdFromRelationship = (relationship, ownAccountId) => {
@@ -333,6 +343,8 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
   const [messageText, setMessageText] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const messageManagerRef = useRef(null);
+  const liveConnectionRef = useRef(null);
+  const liveConnectionKeyRef = useRef('');
   const messagesByRelationshipRef = useRef({});
   const relationshipsRef = useRef([]);
   const syncCursorRef = useRef({});
@@ -619,6 +631,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
             allowEphemeralSessionKey: false,
             requestTimeoutMs: 15000,
           },
+          connectionManager: liveConnectionRef.current,
           sessionResolver: resolveRelationshipSessionKey,
         });
       } catch (error) {
@@ -691,10 +704,124 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     showNotice,
   ]);
 
+  const processLiveChatEnvelope = useCallback(async (envelope = {}) => {
+    const deviceId = session.device?.deviceId || '';
+    if (!accountId || !deviceId || !envelope) return;
+    const relationshipId = String(envelope.metadata?.relationshipId || envelope.relationshipId || '').trim();
+    const relationship = relationshipsRef.current.find((item) => item.relationshipId === relationshipId) || null;
+    let message = null;
+    try {
+      const received = await getMessageManager().receiveEnvelope({ accountId, deviceId, envelope, relationship });
+      message = localMessageFromEnvelope(envelope, accountId, received);
+    } catch {
+      message = localMessageFromEnvelope(envelope, accountId);
+    }
+    if (message) {
+      const merged = mergeRelationshipMessages(messagesByRelationshipRef.current, [message]);
+      await persistMessages(merged);
+    }
+    const mailboxSequence = Math.max(0, Number(envelope.mailboxSequence || 0));
+    const cursorSnapshot = syncCursorRef.current || {};
+    const previousSequence = Number(cursorSnapshot[deviceId] || 0);
+    if (mailboxSequence > previousSequence) {
+      await accountService.request('/sync/ack', 'POST', {
+        deviceId,
+        highestContiguousSequence: mailboxSequence,
+      });
+      await persistSyncCursor({ ...cursorSnapshot, [deviceId]: mailboxSequence });
+    }
+  }, [
+    accountId,
+    accountService,
+    getMessageManager,
+    persistMessages,
+    persistSyncCursor,
+    session.device?.deviceId,
+  ]);
+
   const refreshChatWithSync = useCallback(async (options = {}) => {
     const latestRelationships = await refreshChat();
     return syncChatMessages({ ...options, relationshipsOverride: latestRelationships });
   }, [refreshChat, syncChatMessages]);
+
+  useEffect(() => {
+    const deviceId = session.device?.deviceId || '';
+    if (!loaded || !accountId || !deviceId) return undefined;
+    let cancelled = false;
+    let manager = null;
+    try {
+      const serverUrlForSocket = chatWebSocketUrl(apiBaseUrl);
+      const connectionKey = `${accountId}:${deviceId}:${serverUrlForSocket}`;
+      const eventBus = {
+        emit(eventName, payload = {}) {
+          if (cancelled) return 0;
+          if (eventName === 'connection:identified') {
+            refreshChatWithSync({ silent: true });
+          } else if (eventName === 'message:receive' && payload?.envelope) {
+            processLiveChatEnvelope(payload.envelope).catch((error) => {
+              showNotice?.({ title: 'Chat receive failed', message: error.message, tone: 'error' });
+            });
+          } else if (eventName === 'connection:wake:completed' || eventName === 'connection:recovery:completed') {
+            refreshChatWithSync({ silent: true });
+          }
+          return 1;
+        },
+      };
+      manager = new ChatConnectionManager({
+        config: {
+          serverUrl: serverUrlForSocket,
+          protocolVersion: '1',
+          heartbeatIntervalMs: 30000,
+          heartbeatTimeoutMs: 10000,
+          connectionTimeoutMs: 15000,
+          reconnectMinDelayMs: 1000,
+          reconnectMaxDelayMs: 30000,
+          maxReconnectAttempts: Infinity,
+          backgroundReady: true,
+        },
+        logger: {
+          warn: () => {},
+          info: () => {},
+          debug: () => {},
+        },
+        eventBus,
+        statusManager: { setState: () => {} },
+      });
+      liveConnectionRef.current = manager;
+      liveConnectionKeyRef.current = connectionKey;
+      messageManagerRef.current = null;
+      manager.connect()
+        .then(() => {
+          if (cancelled) return;
+          manager.sendInfrastructureEvent('connection:identify', {
+            accountId,
+            deviceId,
+            platform: Platform.OS,
+            client: 'openx-mobile-chat',
+          });
+        })
+        .catch(() => {});
+    } catch (error) {
+      showNotice?.({ title: 'Chat live connection failed', message: error.message, tone: 'error' });
+    }
+    return () => {
+      cancelled = true;
+      if (liveConnectionRef.current === manager) {
+        liveConnectionRef.current = null;
+        liveConnectionKeyRef.current = '';
+        messageManagerRef.current = null;
+      }
+      manager?.disconnect?.();
+    };
+  }, [
+    accountId,
+    apiBaseUrl,
+    loaded,
+    processLiveChatEnvelope,
+    refreshChatWithSync,
+    session.device?.deviceId,
+    showNotice,
+  ]);
 
   useEffect(() => {
     if (loaded && accountId) refreshChatWithSync({ silent: true });

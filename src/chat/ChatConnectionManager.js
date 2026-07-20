@@ -58,6 +58,7 @@ export class ChatConnectionManager {
       }, this.config.connectionTimeoutMs);
       this.socket.onopen = () => {
         clearTimeout(this.connectionTimeout);
+        this.connectionTimeout = null;
         this.lastConnectedAt = new Date().toISOString();
         this.reconnectAttempts = 0;
         this.setState('connected');
@@ -77,6 +78,7 @@ export class ChatConnectionManager {
   disconnect() {
     this.manualDisconnect = true;
     this.clearReconnectTimer();
+    this.clearConnectionTimeout();
     this.stopHeartbeat();
     this.removeAppStateSubscription();
     if (this.socket) this.socket.close(1000, 'mobile-chat-disconnect');
@@ -137,6 +139,7 @@ export class ChatConnectionManager {
    * Handles socket close.
    */
   handleClose() {
+    this.clearConnectionTimeout();
     this.stopHeartbeat();
     this.lastDisconnectedAt = new Date().toISOString();
     this.setState('disconnected');
@@ -148,7 +151,7 @@ export class ChatConnectionManager {
    * @param {Error} error Failure error.
    */
   handleConnectionFailure(error) {
-    clearTimeout(this.connectionTimeout);
+    this.clearConnectionTimeout();
     this.logger.warn('Mobile Chat connection error', { error: error.message });
     this.eventBus.emit(ChatEvents.CONNECTION_ERROR, { error: error.message });
     this.setState('offline', { error: error.message });
@@ -197,6 +200,14 @@ export class ChatConnectionManager {
   clearReconnectTimer() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  /**
+   * Clears a pending socket connection timeout.
+   */
+  clearConnectionTimeout() {
+    if (this.connectionTimeout) clearTimeout(this.connectionTimeout);
+    this.connectionTimeout = null;
   }
 
   /**

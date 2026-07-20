@@ -26,8 +26,8 @@ export class MessageRouter {
     }
     try {
       const result = await this.client.send(message);
-      await this.storage.setStatus(message.messageId, result.queuedCount > 0 ? MessageConstants.MESSAGE_STATUS.QUEUED : MessageConstants.MESSAGE_STATUS.SENT);
-      return { transport: 'http', queued: result.queuedCount > 0, result };
+      await this.storage.setStatus(message.messageId, MessageConstants.MESSAGE_STATUS.SENT);
+      return { transport: 'http', queued: false, serverQueued: Number(result.queuedCount || 0) > 0, result };
     } catch (error) {
       await this.storage.setStatus(message.messageId, MessageConstants.MESSAGE_STATUS.QUEUED);
       await this.storage.upsertRetry({
