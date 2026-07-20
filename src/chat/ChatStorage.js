@@ -96,7 +96,12 @@ export class ChatStorage {
    */
   async getMetadata() {
     const value = await AsyncStorage.getItem(this.schemaKey);
-    return value ? JSON.parse(value) : null;
+    try {
+      return value ? JSON.parse(value) : null;
+    } catch {
+      await AsyncStorage.removeItem(this.schemaKey);
+      return null;
+    }
   }
 }
 

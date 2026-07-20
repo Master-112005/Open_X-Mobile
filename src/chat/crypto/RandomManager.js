@@ -1,3 +1,5 @@
+import * as ExpoCrypto from 'expo-crypto';
+
 /**
  * Mobile secure random manager.
  */
@@ -8,10 +10,15 @@ export class RandomManager {
    * @returns {Uint8Array} Random bytes.
    */
   bytes(size) {
-    if (!globalThis.crypto?.getRandomValues) throw new Error('Secure random is unavailable.');
-    const bytes = new Uint8Array(size);
-    globalThis.crypto.getRandomValues(bytes);
-    return bytes;
+    const length = Number(size);
+    if (!Number.isSafeInteger(length) || length < 1) throw new Error('Random byte size is invalid.');
+    const bytes = new Uint8Array(length);
+    if (globalThis.crypto?.getRandomValues) {
+      globalThis.crypto.getRandomValues(bytes);
+      return bytes;
+    }
+    if (typeof ExpoCrypto.getRandomBytes === 'function') return new Uint8Array(ExpoCrypto.getRandomBytes(length));
+    throw new Error('Secure random is unavailable.');
   }
 
   /** @returns {Uint8Array} Key bytes. */

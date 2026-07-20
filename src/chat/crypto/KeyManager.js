@@ -1,4 +1,7 @@
-import { toBase64 } from './Encoding';
+import forge from 'node-forge/lib/forge';
+import 'node-forge/lib/sha256';
+
+import { toBase64, utf8 } from './Encoding';
 
 /**
  * Mobile key manager.
@@ -27,6 +30,9 @@ export class KeyManager {
    * @returns {Promise<object>} Key pair.
    */
   async generateKeyPair(keyType, algorithm) {
+    if (!globalThis.crypto?.subtle) {
+      throw new Error('Mobile WebCrypto key-pair generation is unavailable on this device build.');
+    }
     const pair = await globalThis.crypto.subtle.generateKey(algorithm, true, ['sign', 'verify']);
     const publicJwk = await globalThis.crypto.subtle.exportKey('jwk', pair.publicKey);
     const privateJwk = await globalThis.crypto.subtle.exportKey('jwk', pair.privateKey);
@@ -67,12 +73,13 @@ export class KeyManager {
    * @returns {Promise<string>} Fingerprint.
    */
   async fingerprint(publicKey) {
-    const data = new TextEncoder().encode(JSON.stringify(Object.keys(publicKey).sort().reduce((output, key) => {
+    const payload = JSON.stringify(Object.keys(publicKey).sort().reduce((output, key) => {
       output[key] = publicKey[key];
       return output;
-    }, {})));
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
-    return `fp:v1:sha256:${Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+    }, {}));
+    const digest = forge.md.sha256.create();
+    digest.update(payload, 'utf8');
+    return `fp:v1:sha256:${digest.digest().toHex()}`;
   }
 
   /**
@@ -81,7 +88,7 @@ export class KeyManager {
    * @returns {string} Encoded public key.
    */
   exportPublicKey(publicKey) {
-    return toBase64(new TextEncoder().encode(JSON.stringify(publicKey)));
+    return toBase64(utf8(JSON.stringify(publicKey)));
   }
 }
 

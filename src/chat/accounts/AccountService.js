@@ -104,7 +104,16 @@ export class AccountService {
         body: body ? JSON.stringify(body) : undefined,
         signal: controller?.signal,
       });
-      const json = await response.json();
+      const text = await response.text();
+      let json = null;
+      try {
+        json = text ? JSON.parse(text) : {};
+      } catch {
+        const error = new Error(`OpenX Chat Server returned an unreadable response for ${route}.`);
+        error.code = 'chat.response_invalid';
+        error.statusCode = response.status;
+        throw error;
+      }
       if (!response.ok || json.ok === false) {
         const error = new Error(json.error?.message || `OpenX Chat request failed: ${response.status}`);
         error.code = json.error?.code || 'chat.http_failed';
@@ -112,6 +121,18 @@ export class AccountService {
         throw error;
       }
       return json.data;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        const timeout = new Error('OpenX Chat Server did not respond in time. Check the connection and try again.');
+        timeout.code = 'chat.request_timeout';
+        throw timeout;
+      }
+      if (/network request failed|fetch failed/i.test(String(error.message || ''))) {
+        const network = new Error(`OpenX Chat Server is not reachable at ${this.apiBaseUrl}.`);
+        network.code = 'chat.server_unreachable';
+        throw network;
+      }
+      throw error;
     } finally {
       if (timer) clearTimeout(timer);
     }

@@ -1,5 +1,8 @@
+import forge from 'node-forge/lib/forge';
+import 'node-forge/lib/aes';
+
 import CryptoError from './CryptoErrors';
-import { fromBase64, toBase64, utf8 } from './Encoding';
+import { fromBase64, fromBinary, toBase64, toBinary, utf8 } from './Encoding';
 
 /**
  * Mobile AES-GCM manager.
@@ -30,9 +33,10 @@ export class AESManager {
    */
   async encrypt(input) {
     const iv = input.iv || this.random.iv();
-    const cryptoKey = await this.importKey(input.key);
     const plaintext = typeof input.plaintext === 'string' ? utf8(input.plaintext) : input.plaintext;
     const aad = input.aad ? (typeof input.aad === 'string' ? utf8(input.aad) : input.aad) : undefined;
+    if (!globalThis.crypto?.subtle) return this.encryptWithForge({ ...input, iv, plaintext, aad });
+    const cryptoKey = await this.importKey(input.key);
     const encrypted = new Uint8Array(await globalThis.crypto.subtle.encrypt({ name: this.config.aesAlgorithm, iv, additionalData: aad }, cryptoKey, plaintext));
     const ciphertext = encrypted.slice(0, encrypted.byteLength - this.config.tagSizeBytes);
     const tag = encrypted.slice(encrypted.byteLength - this.config.tagSizeBytes);
@@ -53,6 +57,7 @@ export class AESManager {
    */
   async decrypt(input) {
     try {
+      if (!globalThis.crypto?.subtle) return this.decryptWithForge(input);
       const cryptoKey = await this.importKey(input.key);
       const aad = input.aad ? fromBase64(input.aad) : undefined;
       const ciphertext = fromBase64(input.ciphertext);
@@ -68,6 +73,49 @@ export class AESManager {
     } catch (error) {
       throw new CryptoError('crypto.auth_failed', 'AES-GCM authentication failed.');
     }
+  }
+
+  /**
+   * Encrypts with node-forge when React Native WebCrypto is unavailable.
+   * @param {object} input Input.
+   * @returns {object} Envelope.
+   */
+  encryptWithForge(input) {
+    const cipher = forge.cipher.createCipher('AES-GCM', toBinary(input.key));
+    cipher.start({
+      iv: toBinary(input.iv),
+      additionalData: input.aad ? toBinary(input.aad) : '',
+      tagLength: this.config.tagSizeBytes * 8,
+    });
+    cipher.update(forge.util.createBuffer(toBinary(input.plaintext), 'raw'));
+    if (!cipher.finish()) throw new CryptoError('crypto.auth_failed', 'AES-GCM encryption failed.');
+    return {
+      algorithm: this.config.aesAlgorithm,
+      iv: toBase64(input.iv),
+      ciphertext: toBase64(fromBinary(cipher.output.getBytes())),
+      tag: toBase64(fromBinary(cipher.mode.tag.getBytes())),
+      aad: input.aad ? toBase64(input.aad) : null,
+      futureStreaming: false,
+    };
+  }
+
+  /**
+   * Decrypts with node-forge when React Native WebCrypto is unavailable.
+   * @param {object} input Input.
+   * @returns {Uint8Array} Plaintext bytes.
+   */
+  decryptWithForge(input) {
+    const aad = input.aad ? fromBase64(input.aad) : null;
+    const decipher = forge.cipher.createDecipher('AES-GCM', toBinary(input.key));
+    decipher.start({
+      iv: toBinary(fromBase64(input.iv)),
+      additionalData: aad ? toBinary(aad) : '',
+      tag: forge.util.createBuffer(toBinary(fromBase64(input.tag)), 'raw'),
+      tagLength: this.config.tagSizeBytes * 8,
+    });
+    decipher.update(forge.util.createBuffer(toBinary(fromBase64(input.ciphertext)), 'raw'));
+    if (!decipher.finish()) throw new CryptoError('crypto.auth_failed', 'AES-GCM authentication failed.');
+    return fromBinary(decipher.output.getBytes());
   }
 }
 

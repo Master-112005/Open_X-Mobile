@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
+import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
@@ -51,19 +52,6 @@ function ProfileValueRow({ label, value }) {
   );
 }
 
-function HeaderButton({ onPress }) {
-  return (
-    <Pressable
-      accessibilityLabel="Go back"
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-    >
-      <Ionicons color={colors.text} name="chevron-back" size={22} />
-    </Pressable>
-  );
-}
-
 export default function ProfileScreen({ navigation }) {
   const {
     cloudStatus,
@@ -86,6 +74,7 @@ export default function ProfileScreen({ navigation }) {
   const status = isCloud ? cloudStatus?.state : connectionStatus;
   const connected = isCloud ? cloudStatus?.connected === true : connectionStatus === 'connected';
   const version = packageJson?.version || '1.0.0';
+  const bottomDockHeight = getMobileBottomDockHeight(insets);
 
   useEffect(() => {
     setDraftProfile(openXProfile || {});
@@ -165,13 +154,10 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <HeaderButton onPress={() => navigation.goBack()} />
-      </View>
       <ScrollView
         contentContainerStyle={[
           styles.content,
-          { paddingTop: insets.top + 92, paddingBottom: insets.bottom + spacing.xl },
+          { paddingTop: insets.top + spacing.lg, paddingBottom: bottomDockHeight + spacing.xl },
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -276,6 +262,10 @@ export default function ProfileScreen({ navigation }) {
           <InfoRow label="Session" value={sessionValid ? 'Active' : 'Needs reconnect'} />
         </GlassPanel>
       </ScrollView>
+      <MobileBottomDock
+        activeRoute="Settings"
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -284,24 +274,6 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: colors.background,
     flex: 1,
-  },
-  header: {
-    left: 0,
-    paddingHorizontal: spacing.lg,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 10,
-  },
-  headerButton: {
-    alignItems: 'center',
-    backgroundColor: colors.glass,
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
-    height: 52,
-    justifyContent: 'center',
-    width: 52,
   },
   pressed: {
     opacity: 0.78,

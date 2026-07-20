@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
+import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import { useApp } from '../context/AppContext';
 import { formatFileSize } from '../services/fileTransfer';
 import { colors, radius, spacing } from '../styles/theme';
@@ -27,19 +28,6 @@ const formatTimestamp = (timestamp) =>
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(timestamp));
-
-function HeaderButton({ accessibilityLabel, iconName, onPress }) {
-  return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-    >
-      <Ionicons color={colors.text} name={iconName} size={22} />
-    </Pressable>
-  );
-}
 
 function FileRow({ item, onManage, onOpen }) {
   return (
@@ -85,6 +73,7 @@ export default function TransfersScreen({ navigation }) {
     showNotice,
   } = useApp();
   const insets = useSafeAreaInsets();
+  const bottomDockHeight = getMobileBottomDockHeight(insets);
   const [managedFile, setManagedFile] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -193,20 +182,7 @@ export default function TransfersScreen({ navigation }) {
 
   return (
     <View style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <HeaderButton
-          accessibilityLabel="Go back"
-          iconName="chevron-back"
-          onPress={() => navigation.goBack()}
-        />
-        <HeaderButton
-          accessibilityLabel="Open QR scanner"
-          iconName="qr-code-outline"
-          onPress={() => navigation.navigate('QRPairing')}
-        />
-      </View>
-
-      <View style={[styles.titleBlock, { paddingTop: insets.top + 88 }]}>
+      <View style={[styles.titleBlock, { paddingTop: insets.top + spacing.lg }]}>
         <Text style={styles.title}>Files</Text>
       </View>
 
@@ -216,7 +192,7 @@ export default function TransfersScreen({ navigation }) {
         </View>
       ) : (
         <FlatList
-          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + spacing.xl }]}
+          contentContainerStyle={[styles.listContent, { paddingBottom: bottomDockHeight + spacing.xl }]}
           data={receivedFiles}
           keyExtractor={(item) => item.id}
           ListEmptyComponent={
@@ -301,6 +277,10 @@ export default function TransfersScreen({ navigation }) {
           </Pressable>
         </Pressable>
       </Modal>
+      <MobileBottomDock
+        activeRoute="Transfers"
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -309,26 +289,6 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: colors.background,
     flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    left: 0,
-    paddingHorizontal: spacing.lg,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 10,
-  },
-  headerButton: {
-    alignItems: 'center',
-    backgroundColor: colors.glass,
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
-    height: 52,
-    justifyContent: 'center',
-    width: 52,
   },
   pressed: {
     opacity: 0.78,

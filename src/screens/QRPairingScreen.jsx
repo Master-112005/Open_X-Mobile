@@ -5,15 +5,16 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Animated,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import FadeInView from '../components/FadeInView';
 import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
+import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { parsePairingQrPayload } from '../services/qrPairing';
@@ -30,6 +31,8 @@ export default function QRPairingScreen({ navigation, route }) {
     showNotice,
   } = useApp();
   const selectedDeviceName = route.params?.deviceName || deviceName;
+  const insets = useSafeAreaInsets();
+  const bottomDockHeight = getMobileBottomDockHeight(insets);
 
   useEffect(() => {
     let animation;
@@ -68,7 +71,7 @@ export default function QRPairingScreen({ navigation, route }) {
       tone: 'error',
       dismissible: false,
       actions: [
-        { label: 'Cancel', onPress: () => navigation.goBack() },
+        { label: 'Home', onPress: () => navigation.popToTop() },
         { label: 'Scan again', tone: 'primary', onPress: () => setScanLocked(false) },
       ],
     });
@@ -113,6 +116,10 @@ export default function QRPairingScreen({ navigation, route }) {
         <View style={styles.centeredContainer}>
           <ActivityIndicator color={colors.primary} size="large" />
         </View>
+        <MobileBottomDock
+          activeRoute="QRPairing"
+          navigation={navigation}
+        />
       </ScreenBackground>
     );
   }
@@ -140,14 +147,12 @@ export default function QRPairingScreen({ navigation, route }) {
               style={styles.permissionButton}
               tone="primary"
             />
-            <GlassButton
-              iconName="chevron-back"
-              label="Cancel"
-              onPress={() => navigation.goBack()}
-              style={styles.permissionButton}
-            />
           </GlassPanel>
         </FadeInView>
+        <MobileBottomDock
+          activeRoute="QRPairing"
+          navigation={navigation}
+        />
       </ScreenBackground>
     );
   }
@@ -161,7 +166,7 @@ export default function QRPairingScreen({ navigation, route }) {
         style={StyleSheet.absoluteFill}
       />
 
-      <View style={styles.scrim}>
+      <View style={[styles.scrim, { paddingBottom: bottomDockHeight + spacing.md }]}>
         <View style={styles.instructions}>
           <Text style={styles.title}>Scan pairing QR</Text>
           <Text style={styles.subtitle}>
@@ -199,19 +204,11 @@ export default function QRPairingScreen({ navigation, route }) {
           )}
         </View>
 
-        <Pressable
-          accessibilityRole="button"
-          disabled={pairing}
-          onPress={() => navigation.goBack()}
-          style={({ pressed }) => [
-            styles.cameraCancelButton,
-            pairing && styles.buttonDisabled,
-            pressed && !pairing && styles.cameraCancelButtonPressed,
-          ]}
-        >
-          <Text style={styles.cameraCancelText}>Cancel</Text>
-        </Pressable>
       </View>
+      <MobileBottomDock
+        activeRoute="QRPairing"
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -334,17 +331,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: spacing.md,
   },
-  cameraCancelButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(7, 11, 20, 0.78)',
-    borderColor: 'rgba(255, 255, 255, 0.35)',
-    borderRadius: radius.round,
-    borderWidth: 1,
-    height: 48,
-    justifyContent: 'center',
-    width: 140,
-  },
-  cameraCancelButtonPressed: { backgroundColor: 'rgba(21, 30, 48, 0.95)' },
-  cameraCancelText: { color: colors.white, fontSize: 15, fontWeight: '700' },
-  buttonDisabled: { opacity: 0.5 },
 });

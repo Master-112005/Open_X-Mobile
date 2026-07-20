@@ -1,4 +1,10 @@
+import forge from 'node-forge/lib/forge';
+import 'node-forge/lib/sha256';
+
+import RandomManager from '../crypto/RandomManager';
 import { MessageConstants } from './MessageConstants';
+
+const random = new RandomManager();
 
 /**
  * Mobile local encrypted message model.
@@ -38,8 +44,7 @@ export class MessageModel {
 
   /** @returns {string} MessageID. */
   static messageId() {
-    const bytes = new Uint8Array(32);
-    globalThis.crypto.getRandomValues(bytes);
+    const bytes = random.bytes(32);
     return `msg_${Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   }
 
@@ -49,8 +54,9 @@ export class MessageModel {
    * @returns {Promise<string>} Checksum.
    */
   static async checksum(value) {
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
-    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const digest = forge.md.sha256.create();
+    digest.update(String(value), 'utf8');
+    return digest.digest().toHex();
   }
 }
 

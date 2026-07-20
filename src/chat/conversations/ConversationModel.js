@@ -1,11 +1,14 @@
+import RandomManager from '../crypto/RandomManager';
+
+const random = new RandomManager();
+
 /**
  * Mobile local conversation record factory.
  */
 export class ConversationModel {
   /** @returns {string} ConversationID. */
   static conversationId() {
-    const bytes = new Uint8Array(32);
-    globalThis.crypto.getRandomValues(bytes);
+    const bytes = random.bytes(32);
     return `conv_${Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
   }
 

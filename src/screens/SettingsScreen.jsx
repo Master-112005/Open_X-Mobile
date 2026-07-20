@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -13,53 +13,121 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
-import SegmentedSlider from '../components/SegmentedSlider';
+import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
 const PERMISSION_ITEMS = [
-  { key: 'remoteCommands', label: 'Desktop commands' },
-  { key: 'fileTransfer', label: 'File transfer' },
-  { key: 'receiveFiles', label: 'Receive files' },
-  { key: 'sendFiles', label: 'Send files' },
+  { key: 'remoteCommands', label: 'Commands', iconName: 'terminal-outline' },
+  { key: 'fileTransfer', label: 'File transfer', iconName: 'swap-horizontal-outline' },
+  { key: 'receiveFiles', label: 'Receive files', iconName: 'download-outline' },
+  { key: 'sendFiles', label: 'Send files', iconName: 'share-outline' },
 ];
 
-const SETTINGS_TABS = [
-  { label: 'System', value: 'system' },
-  { label: 'Profile', value: 'profile' },
-  { label: 'Mobile', value: 'mobile' },
-  { label: 'Modes', value: 'modes' },
-];
+function sectionDivider(index) {
+  return index > 0 ? <View style={styles.divider} /> : null;
+}
 
-function HeaderButton({ accessibilityLabel, iconName, onPress }) {
+function Section({ children, title }) {
   return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
-      accessibilityRole="button"
-      onPress={onPress}
-      style={({ pressed }) => [styles.headerButton, pressed && styles.pressed]}
-    >
-      <Ionicons color={colors.text} name={iconName} size={22} />
-    </Pressable>
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <GlassPanel style={styles.sectionPanel} contentStyle={styles.sectionContent}>
+        {children}
+      </GlassPanel>
+    </View>
   );
+}
+
+function StatusPill({ connected = false, label }) {
+  return (
+    <View style={[styles.statusPill, connected ? styles.statusPillOn : styles.statusPillOff]}>
+      <View style={[styles.statusDot, connected ? styles.statusDotOn : styles.statusDotOff]} />
+      <Text numberOfLines={1} style={styles.statusText}>{label}</Text>
+    </View>
+  );
+}
+
+function SettingRow({
+  connected,
+  disabled = false,
+  iconName,
+  label,
+  onPress,
+  status,
+}) {
+  const content = (
+    <>
+      <View style={styles.rowIcon}>
+        <Ionicons color={colors.text} name={iconName} size={20} />
+      </View>
+      <View style={styles.rowCopy}>
+        <Text numberOfLines={1} style={styles.rowLabel}>{label}</Text>
+        {status ? <Text numberOfLines={1} style={styles.rowStatus}>{status}</Text> : null}
+      </View>
+      {typeof connected === 'boolean' ? (
+        <StatusPill connected={connected} label={connected ? 'On' : 'Off'} />
+      ) : null}
+      {onPress ? <Ionicons color={colors.textMuted} name="chevron-forward" size={18} /> : null}
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <Pressable
+        accessibilityLabel={label}
+        accessibilityRole="button"
+        disabled={disabled}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.settingRow,
+          pressed && styles.pressed,
+          disabled && styles.disabled,
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return <View style={[styles.settingRow, disabled && styles.disabled]}>{content}</View>;
 }
 
 export default function SettingsScreen({ navigation }) {
   const {
     cloudStatus,
+    connectionMode,
+    connectionStatus,
     deviceName,
+    openXProfile,
+    paired,
     permissions,
-    permissionsLastUpdated,
     permissionsLoaded,
+    scheduleItems,
+    sessionValid,
+    transferHistory,
     updateDeviceName,
     showNotice,
   } = useApp();
   const [phoneName, setPhoneName] = useState(deviceName);
   const [savingName, setSavingName] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('system');
   const insets = useSafeAreaInsets();
+  const bottomDockHeight = getMobileBottomDockHeight(insets);
+  const isCloud = connectionMode === 'cloud';
+  const activeConnected = isCloud ? cloudStatus?.connected === true : connectionStatus === 'connected';
+  const activeStatusText = isCloud ? cloudStatus?.state || 'disconnected' : connectionStatus || 'disconnected';
+  const receivedCount = useMemo(
+    () => transferHistory.filter((item) => item.direction === 'received').length,
+    [transferHistory],
+  );
+  const scheduleCount = Array.isArray(scheduleItems) ? scheduleItems.length : 0;
+  const profileReady = Boolean(
+    String(openXProfile?.fullName || '').trim() ||
+    String(openXProfile?.email || '').trim() ||
+    String(openXProfile?.phone || '').trim(),
+  );
+  const allowedPermissionCount = PERMISSION_ITEMS.filter((item) => permissions?.[item.key]).length;
 
   useEffect(() => {
     setPhoneName(deviceName);
@@ -68,13 +136,13 @@ export default function SettingsScreen({ navigation }) {
   const handleSaveDeviceName = async () => {
     const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
     if (!normalizedName) {
-      showNotice({ title: 'Mobile name required', message: 'Enter a name for this mobile.', tone: 'warning' });
+      showNotice({ title: 'Name required', message: 'Enter a mobile name.', tone: 'warning' });
       return;
     }
     setSavingName(true);
     try {
       await updateDeviceName(normalizedName);
-      showNotice({ title: 'Saved', message: 'This mobile name was saved.', tone: 'success' });
+      showNotice({ title: 'Saved', message: 'Mobile name updated.', tone: 'success' });
     } catch (error) {
       showNotice({ title: 'Unable to save', message: error.message || 'Please try again.', tone: 'error' });
     } finally {
@@ -82,148 +150,137 @@ export default function SettingsScreen({ navigation }) {
     }
   };
 
-  const activeStatusText = cloudStatus?.state || 'disconnected';
-  const activeConnected = cloudStatus?.connected === true;
-
   return (
     <View style={styles.screen}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.screen}
       >
-        <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-          <HeaderButton
-            accessibilityLabel="Go back"
-            iconName="chevron-back"
-            onPress={() => navigation.goBack()}
-          />
-          <HeaderButton
-            accessibilityLabel="Open QR scanner"
-            iconName="qr-code-outline"
-            onPress={() => navigation.navigate('QRPairing')}
-          />
-        </View>
-
         <ScrollView
-          contentContainerStyle={[styles.content, { paddingTop: insets.top + 84, paddingBottom: insets.bottom + spacing.xl }]}
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: insets.top + spacing.lg,
+              paddingBottom: bottomDockHeight + spacing.xl,
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.titleBlock}>
-            <Text style={styles.title}>Settings</Text>
-            <Text style={styles.subtitle}>Manage pairing and connection behavior.</Text>
-          </View>
+          <Text style={styles.title}>Settings</Text>
 
-          <SegmentedSlider
-            accessibilityLabel="Settings sections"
-            onChange={setSettingsTab}
-            options={SETTINGS_TABS}
-            segmentStyle={styles.settingsSegment}
-            style={styles.settingsSlider}
-            textStyle={styles.settingsSegmentText}
-            value={settingsTab}
-          />
-
-          {settingsTab === 'system' ? (
-            <>
-              <GlassPanel style={styles.summaryCard} contentStyle={styles.summaryContent}>
-                <View style={styles.summaryMain}>
-                  <View style={styles.summaryIcon}>
-                    <Ionicons color={colors.text} name="phone-portrait-outline" size={22} />
-                  </View>
-                  <View style={styles.summaryText}>
-                    <Text numberOfLines={1} style={styles.summaryName}>{phoneName || deviceName}</Text>
-                    <Text style={styles.summaryMeta}>Cloud relay</Text>
-                  </View>
-                </View>
-                <View style={[styles.summaryStatus, activeConnected ? styles.summaryStatusOn : styles.summaryStatusOff]}>
-                  <View style={[styles.summaryDot, activeConnected ? styles.summaryDotOn : styles.summaryDotOff]} />
-                  <Text style={styles.summaryStatusText}>{activeStatusText || 'offline'}</Text>
-                </View>
-              </GlassPanel>
-
-              <Text style={styles.sectionTitle}>Desktop permissions</Text>
-              <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-                {permissionsLoaded ? (
-                  <View style={styles.permissionList}>
-                    {PERMISSION_ITEMS.map((item) => {
-                      const allowed = permissions[item.key];
-                      return (
-                        <View key={item.key} style={styles.permissionRow}>
-                          <Text style={styles.permissionLabel}>{item.label}</Text>
-                          <View style={[styles.permissionDot, allowed ? styles.allowed : styles.denied]} />
-                        </View>
-                      );
-                    })}
-                  </View>
-                ) : (
-                  <ActivityIndicator color={colors.text} style={styles.loader} />
-                )}
-                <Text style={styles.updatedText}>
-                  {permissionsLastUpdated
-                    ? `Updated ${new Date(permissionsLastUpdated).toLocaleString()}`
-                    : 'Waiting for desktop permission state'}
-                </Text>
-              </GlassPanel>
-            </>
-          ) : null}
-
-          {settingsTab === 'mobile' ? (
-            <>
-              <Text style={styles.sectionTitle}>Mobile name</Text>
-              <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-                <Text style={styles.label}>Mobile name</Text>
-                <TextInput
-                  autoCapitalize="words"
-                  autoCorrect={false}
-                  maxLength={100}
-                  onChangeText={setPhoneName}
-                  placeholder="My Mobile"
-                  placeholderTextColor={colors.textMuted}
-                  returnKeyType="done"
-                  style={styles.input}
-                  value={phoneName}
-                />
-                <GlassButton
-                  disabled={savingName || phoneName.trim().length === 0}
-                  iconName="phone-portrait-outline"
-                  label="Save Name"
-                  loading={savingName}
-                  onPress={handleSaveDeviceName}
-                  style={styles.nameButton}
-                />
-              </GlassPanel>
-            </>
-          ) : null}
-
-          {settingsTab === 'profile' ? (
-            <GlassPanel style={styles.summaryCard} contentStyle={styles.cardContent}>
-              <View style={styles.profilePrompt}>
-                <View style={styles.summaryIcon}>
-                  <Ionicons color={colors.text} name="person-circle-outline" size={22} />
-                </View>
-                <View style={styles.summaryText}>
-                  <Text style={styles.summaryName}>Profile</Text>
-                  <Text style={styles.summaryMeta}>Manage local identity fields.</Text>
-                </View>
+          <Section title="Device">
+            <View style={styles.nameRow}>
+              <View style={styles.rowIcon}>
+                <Ionicons color={colors.text} name="phone-portrait-outline" size={20} />
               </View>
-              <GlassButton
-                iconName="person-circle-outline"
-                label="Open Profile"
-                onPress={() => navigation.navigate('Profile')}
-                style={styles.nameButton}
+              <TextInput
+                autoCapitalize="words"
+                autoCorrect={false}
+                maxLength={100}
+                onChangeText={setPhoneName}
+                placeholder="OpenX Mobile"
+                placeholderTextColor={colors.textMuted}
+                returnKeyType="done"
+                style={styles.nameInput}
+                value={phoneName}
               />
-            </GlassPanel>
-          ) : null}
+              <Pressable
+                accessibilityLabel="Save mobile name"
+                accessibilityRole="button"
+                disabled={savingName || phoneName.trim().length === 0}
+                onPress={handleSaveDeviceName}
+                style={({ pressed }) => [
+                  styles.saveNameButton,
+                  pressed && styles.pressed,
+                  (savingName || phoneName.trim().length === 0) && styles.disabled,
+                ]}
+              >
+                {savingName ? (
+                  <ActivityIndicator color={colors.background} size="small" />
+                ) : (
+                  <Ionicons color={colors.background} name="checkmark" size={20} />
+                )}
+              </Pressable>
+            </View>
+            {sectionDivider(1)}
+            <SettingRow
+              connected={activeConnected}
+              iconName="cloud-outline"
+              label="Cloud relay"
+              status={activeStatusText}
+            />
+          </Section>
 
-          {settingsTab === 'modes' ? (
-            <GlassPanel style={styles.card} contentStyle={styles.cardContent}>
-              <Text style={styles.advancedText}>
-                OpenX Mobile uses cloud pairing and the secure relay for commands, schedules, and file transfers.
-              </Text>
-            </GlassPanel>
-          ) : null}
+          <Section title="Account">
+            <SettingRow
+              iconName="person-circle-outline"
+              label="Profile"
+              onPress={() => navigation.navigate('Profile')}
+              status={profileReady ? 'Saved' : 'Not set'}
+            />
+          </Section>
+
+          <Section title="Connection">
+            <SettingRow
+              iconName="qr-code-outline"
+              label="Pair desktop"
+              onPress={() => navigation.navigate('QRPairing')}
+              status={paired ? 'Paired' : 'Not paired'}
+            />
+            {sectionDivider(1)}
+            <SettingRow
+              connected={sessionValid}
+              iconName="shield-checkmark-outline"
+              label="Session"
+              status={sessionValid ? 'Active' : 'Reconnect'}
+            />
+          </Section>
+
+          <Section title="Features">
+            <SettingRow
+              iconName="calendar-outline"
+              label="Calendar"
+              onPress={() => navigation.navigate('Calendar')}
+              status={`${scheduleCount} saved`}
+            />
+            {sectionDivider(1)}
+            <SettingRow
+              iconName="folder-open-outline"
+              label="Files"
+              onPress={() => navigation.navigate('Transfers')}
+              status={`${receivedCount} received`}
+            />
+          </Section>
+
+          <Section title="Desktop access">
+            {permissionsLoaded ? (
+              PERMISSION_ITEMS.map((item, index) => (
+                <View key={item.key}>
+                  {sectionDivider(index)}
+                  <SettingRow
+                    connected={permissions?.[item.key] === true}
+                    iconName={item.iconName}
+                    label={item.label}
+                    status={permissions?.[item.key] ? 'Allowed' : 'Blocked'}
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color={colors.text} />
+                <Text style={styles.rowStatus}>Loading access</Text>
+              </View>
+            )}
+            {permissionsLoaded ? (
+              <Text style={styles.accessSummary}>{allowedPermissionCount}/{PERMISSION_ITEMS.length} allowed</Text>
+            ) : null}
+          </Section>
         </ScrollView>
+        <MobileBottomDock
+          activeRoute="Settings"
+          navigation={navigation}
+        />
       </KeyboardAvoidingView>
     </View>
   );
@@ -234,215 +291,150 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    left: 0,
-    paddingHorizontal: spacing.lg,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 10,
-  },
-  headerButton: {
-    alignItems: 'center',
-    backgroundColor: colors.glass,
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
-    height: 52,
-    justifyContent: 'center',
-    width: 52,
-  },
-  pressed: {
-    opacity: 0.78,
-    transform: [{ scale: 0.96 }],
-  },
   content: {
     paddingHorizontal: spacing.lg,
-  },
-  titleBlock: {
-    marginBottom: spacing.md,
   },
   title: {
     color: colors.text,
     fontSize: 30,
     fontWeight: '900',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.xl,
   },
-  subtitle: {
-    color: colors.textMuted,
-    fontSize: 13,
-    fontWeight: '600',
-    lineHeight: 18,
-  },
-  settingsSlider: {
+  section: {
     marginBottom: spacing.lg,
-    minHeight: 52,
   },
-  settingsSegment: {
-    height: 44,
-    paddingHorizontal: spacing.xs,
-  },
-  settingsSegmentText: {
+  sectionTitle: {
+    color: colors.textSecondary,
     fontSize: 12,
+    fontWeight: '900',
+    marginBottom: spacing.sm,
+    marginLeft: spacing.sm,
+    textTransform: 'uppercase',
   },
-  summaryCard: {
+  sectionPanel: {
     borderRadius: radius.lg,
-    marginBottom: spacing.md,
   },
-  summaryContent: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: spacing.lg,
+  sectionContent: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
-  summaryMain: {
+  settingRow: {
     alignItems: 'center',
-    flex: 1,
     flexDirection: 'row',
     gap: spacing.md,
-    minWidth: 0,
+    minHeight: 62,
+    paddingVertical: spacing.sm,
   },
-  summaryIcon: {
+  nameRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    minHeight: 62,
+    paddingVertical: spacing.sm,
+  },
+  rowIcon: {
     alignItems: 'center',
     backgroundColor: colors.glassSubtle,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     borderWidth: 1,
-    height: 48,
+    height: 42,
     justifyContent: 'center',
-    width: 48,
+    width: 42,
   },
-  summaryText: {
+  rowCopy: {
     flex: 1,
     minWidth: 0,
   },
-  profilePrompt: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  summaryName: {
+  rowLabel: {
     color: colors.text,
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '900',
   },
-  summaryMeta: {
+  rowStatus: {
     color: colors.textMuted,
     fontSize: 12,
     fontWeight: '700',
     marginTop: 3,
+    textTransform: 'capitalize',
   },
-  summaryStatus: {
+  nameInput: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    color: colors.text,
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    height: 46,
+    minWidth: 0,
+    paddingHorizontal: spacing.md,
+  },
+  saveNameButton: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderRadius: radius.round,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
+  statusPill: {
     alignItems: 'center',
     borderRadius: radius.round,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    maxWidth: 126,
-    minHeight: 34,
+    minHeight: 32,
     paddingHorizontal: spacing.sm,
   },
-  summaryStatusOn: {
+  statusPillOn: {
     backgroundColor: 'rgba(70, 217, 145, 0.12)',
     borderColor: 'rgba(70, 217, 145, 0.34)',
   },
-  summaryStatusOff: {
-    backgroundColor: 'rgba(255, 83, 83, 0.10)',
-    borderColor: 'rgba(255, 83, 83, 0.30)',
+  statusPillOff: {
+    backgroundColor: 'rgba(255, 102, 117, 0.10)',
+    borderColor: 'rgba(255, 102, 117, 0.30)',
   },
-  summaryDot: {
+  statusDot: {
     borderRadius: radius.round,
-    height: 8,
-    width: 8,
+    height: 7,
+    width: 7,
   },
-  summaryDotOn: {
+  statusDotOn: {
     backgroundColor: colors.success,
   },
-  summaryDotOff: {
+  statusDotOff: {
     backgroundColor: colors.danger,
   },
-  summaryStatusText: {
+  statusText: {
     color: colors.text,
-    flexShrink: 1,
     fontSize: 11,
     fontWeight: '900',
-    textTransform: 'capitalize',
   },
-  sectionTitle: {
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '900',
-    marginBottom: spacing.sm,
-    marginTop: spacing.lg,
+  divider: {
+    backgroundColor: colors.border,
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 54,
   },
-  card: {
-    borderRadius: radius.lg,
-  },
-  cardContent: {
-    padding: spacing.lg,
-  },
-  permissionList: {
-    gap: spacing.md,
-  },
-  permissionRow: {
+  loadingRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 32,
+    gap: spacing.md,
+    minHeight: 62,
   },
-  permissionLabel: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  permissionDot: {
-    borderRadius: radius.round,
-    height: 10,
-    width: 10,
-  },
-  allowed: { backgroundColor: colors.success },
-  denied: { backgroundColor: colors.danger },
-  updatedText: {
+  accessSummary: {
     color: colors.textMuted,
     fontSize: 11,
-    marginTop: spacing.lg,
-  },
-  loader: {
-    marginVertical: spacing.lg,
-  },
-  label: {
-    color: colors.textSecondary,
-    fontSize: 12,
     fontWeight: '800',
-    marginBottom: spacing.sm,
+    paddingBottom: spacing.sm,
+    paddingLeft: 54,
   },
-  fieldGap: {
-    marginTop: spacing.lg,
+  pressed: {
+    opacity: 0.78,
+    transform: [{ scale: 0.98 }],
   },
-  input: {
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    color: colors.text,
-    fontSize: 15,
-    height: 54,
-    paddingHorizontal: spacing.lg,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginTop: spacing.lg,
-  },
-  buttonFlex: { flex: 1 },
-  nameButton: {
-    marginTop: spacing.lg,
-  },
-  advancedText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 19,
+  disabled: {
+    opacity: 0.45,
   },
 });

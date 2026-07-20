@@ -21,7 +21,12 @@ export class ConversationStorage {
   async initialize() {
     if (this.started) return;
     const raw = await AsyncStorage.getItem(this.config.storageKey);
-    this.state = raw ? this.normalize(JSON.parse(raw)) : this.empty();
+    try {
+      this.state = raw ? this.normalize(JSON.parse(raw)) : this.empty();
+    } catch {
+      this.state = this.empty();
+      await AsyncStorage.removeItem(this.config.storageKey);
+    }
     if (!raw) await this.persist();
     this.started = true;
   }

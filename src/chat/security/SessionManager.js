@@ -1,10 +1,10 @@
+import RandomManager from '../crypto/RandomManager';
 import SecurityEvents from './SecurityEvents';
 
+const random = new RandomManager();
+
 function randomHex(bytes) {
-  const cryptoApi = globalThis.crypto;
-  if (!cryptoApi?.getRandomValues) throw new Error('Secure random generation is unavailable for mobile security sessions.');
-  const values = new Uint8Array(bytes);
-  cryptoApi.getRandomValues(values);
+  const values = random.bytes(bytes);
   return Array.from(values).map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 

@@ -1,4 +1,7 @@
 import { toBase64 } from '../crypto/Encoding';
+import RandomManager from '../crypto/RandomManager';
+
+const random = new RandomManager();
 
 /**
  * Mobile local conversation index manager.
@@ -18,8 +21,7 @@ export class IndexManager {
 
   /** @returns {string} IndexID. */
   indexId() {
-    const bytes = new Uint8Array(18);
-    globalThis.crypto.getRandomValues(bytes);
+    const bytes = random.bytes(18);
     return `idx_${toBase64(bytes)}`;
   }
 

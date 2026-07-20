@@ -25,7 +25,12 @@ export class SynchronizationCopyManager {
   async initialize() {
     if (this.started) return;
     const value = await this.storage.getItem(this.config.storageKey);
-    this.state = value ? this.normalize(JSON.parse(value)) : this.empty();
+    try {
+      this.state = value ? this.normalize(JSON.parse(value)) : this.empty();
+    } catch {
+      this.state = this.empty();
+      await this.storage.removeItem(this.config.storageKey);
+    }
     if (!value) await this.persist();
     this.started = true;
   }

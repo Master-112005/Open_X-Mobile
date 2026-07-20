@@ -1,4 +1,7 @@
-import { fromBase64 } from '../crypto/Encoding';
+import forge from 'node-forge/lib/forge';
+import 'node-forge/lib/sha256';
+
+import { fromBase64, toBinary } from '../crypto/Encoding';
 
 /**
  * Mobile transfer integrity manager.
@@ -11,8 +14,9 @@ export class IntegrityManager {
    */
   async sha256(value) {
     const bytes = typeof value === 'string' ? fromBase64(value) : value instanceof Uint8Array ? value : new Uint8Array(value);
-    const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes));
-    return Array.from(digest).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    const digest = forge.md.sha256.create();
+    digest.update(toBinary(bytes), 'raw');
+    return digest.digest().toHex();
   }
 
   /**

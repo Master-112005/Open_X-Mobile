@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 
 /**
  * Persists local mobile device registration state.
@@ -21,13 +22,29 @@ export class DeviceRegistry {
   async load() {
     if (this.state) return this.state;
     const raw = await AsyncStorage.getItem(this.stateKey);
-    this.state = raw ? JSON.parse(raw) : {
+    let shouldSave = !raw;
+    try {
+      this.state = raw ? JSON.parse(raw) : null;
+    } catch {
+      await AsyncStorage.removeItem(this.stateKey);
+      this.state = null;
+      shouldSave = true;
+    }
+    this.state = this.state && typeof this.state === 'object' && !Array.isArray(this.state) ? this.state : {
       clientDeviceKey: this.createClientDeviceKey(),
       device: null,
       approvals: [],
       updatedAt: new Date().toISOString(),
     };
-    if (!raw) await this.save();
+    if (!this.state.clientDeviceKey) {
+      this.state.clientDeviceKey = this.createClientDeviceKey();
+      shouldSave = true;
+    }
+    if (!Array.isArray(this.state.approvals)) {
+      this.state.approvals = [];
+      shouldSave = true;
+    }
+    if (shouldSave) await this.save();
     return this.state;
   }
 
@@ -73,7 +90,8 @@ export class DeviceRegistry {
    */
   createClientDeviceKey() {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-    return `mobile-${Date.now()}-${Math.random().toString(16).slice(2)}-${Math.random().toString(16).slice(2)}`;
+    if (typeof Crypto.randomUUID === 'function') return Crypto.randomUUID();
+    throw new Error('Secure mobile device key generation is unavailable.');
   }
 }
 

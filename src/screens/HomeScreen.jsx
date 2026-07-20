@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatBubble from '../components/ChatBubble';
+import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import SegmentedSlider from '../components/SegmentedSlider';
 import { useApp } from '../context/AppContext';
 import MobileChatPanel from './MobileChatPanel';
@@ -32,14 +33,6 @@ import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 const WORKSPACE_OPTIONS = [
   { label: 'Assistant', value: 'assistant' },
   { label: 'Chat', value: 'chat' },
-];
-
-const ACTION_OPTIONS = [
-  { label: 'Files', value: 'Transfers', iconName: 'folder-open-outline', showLabel: false },
-  { label: 'Calendar', value: 'Calendar', iconName: 'calendar-outline', showLabel: false },
-  { label: 'Pair', value: 'QRPairing', iconName: 'qr-code-outline', showLabel: false },
-  { label: 'Profile', value: 'Profile', iconName: 'person-circle-outline', showLabel: false },
-  { label: 'Settings', value: 'Settings', iconName: 'settings-outline', showLabel: false },
 ];
 
 function ConnectionDot({ status, onReconnect }) {
@@ -110,12 +103,11 @@ export default function HomeScreen({ navigation }) {
   const [selectingFile, setSelectingFile] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
   const [workspace, setWorkspace] = useState('assistant');
-  const [actionValue, setActionValue] = useState('');
   const listRef = useRef(null);
   const scrollFrameRef = useRef(null);
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, spacing.sm);
-  const bottomActionHeight = bottomInset + 58 + spacing.sm;
+  const bottomActionHeight = getMobileBottomDockHeight(insets);
   const assistantDockHeight = bottomActionHeight + 58 + spacing.sm;
   const topControlsHeight = insets.top + spacing.sm + 54 + spacing.lg;
   const activeConnectionStatus = connectionMode === 'cloud'
@@ -233,13 +225,6 @@ export default function HomeScreen({ navigation }) {
       showNotice({ title: 'Unable to reconnect', message: error.message || 'Unable to reconnect OpenX.', tone: 'error' });
     });
   }, [reconnectActiveConnection, showNotice]);
-
-  const handleAction = useCallback((route) => {
-    if (!route) return;
-    setActionValue(route);
-    navigation.navigate(route);
-    requestAnimationFrame(() => setActionValue(''));
-  }, [navigation]);
 
   return (
     <View style={styles.screen}>
@@ -368,24 +353,20 @@ export default function HomeScreen({ navigation }) {
                 />
               </Pressable>
             </LinearGradient>
-            <SegmentedSlider
-              accessibilityLabel="OpenX mobile navigation"
-              onChange={handleAction}
-              options={ACTION_OPTIONS}
-              segmentStyle={styles.actionSegment}
-              style={styles.actionSlider}
-              value={actionValue}
+            <MobileBottomDock
+              activeRoute="Home"
+              fixed={false}
+              includeSafeArea={false}
+              navigation={navigation}
             />
           </View>
         ) : (
           <View style={[styles.actionDock, { paddingBottom: bottomInset }]}>
-            <SegmentedSlider
-              accessibilityLabel="OpenX mobile navigation"
-              onChange={handleAction}
-              options={ACTION_OPTIONS}
-              segmentStyle={styles.actionSegment}
-              style={styles.actionSlider}
-              value={actionValue}
+            <MobileBottomDock
+              activeRoute="Home"
+              fixed={false}
+              includeSafeArea={false}
+              navigation={navigation}
             />
           </View>
         )}
@@ -451,13 +432,6 @@ const styles = StyleSheet.create({
   modeSlider: {
     flex: 1,
     minHeight: 54,
-  },
-  actionSlider: {
-    minHeight: 50,
-  },
-  actionSegment: {
-    height: 42,
-    paddingHorizontal: 4,
   },
   floatPressed: {
     opacity: 0.82,

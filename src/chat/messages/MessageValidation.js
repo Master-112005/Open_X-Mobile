@@ -1,3 +1,5 @@
+import { utf8 } from '../crypto/Encoding';
+
 /**
  * Mobile message validator.
  */
@@ -19,7 +21,7 @@ export class MessageValidation {
     const messageType = this.messageType(input.messageType || 'Text');
     const plaintext = String(input.plaintext ?? input.text ?? '');
     if (!plaintext) throw new Error('Message text is required.');
-    if (new TextEncoder().encode(plaintext).byteLength > this.config.maxMessageSizeBytes) throw new Error('Message is too large.');
+    if (utf8(plaintext).byteLength > this.config.maxMessageSizeBytes) throw new Error('Message is too large.');
     return {
       relationshipId: this.relationshipId(input.relationshipId),
       senderAccountId: this.accountId(input.senderAccountId),

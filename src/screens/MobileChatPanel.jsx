@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Crypto from 'expo-crypto';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
@@ -17,7 +17,6 @@ import {
 
 import SegmentedSlider from '../components/SegmentedSlider';
 import AccountService from '../chat/accounts/AccountService';
-import MessageManager from '../chat/messages/MessageManager';
 import { colors, radius, shadows, spacing } from '../styles/theme';
 
 const DEFAULT_CHAT_API = 'https://openx-chat-server.onrender.com';
@@ -25,7 +24,10 @@ const CHAT_SESSION_KEY = '@openx-mobile/chat/session-v1';
 const CHAT_MESSAGES_KEY = '@openx-mobile/chat/messages-v1';
 const CHAT_PINNED_KEY = '@openx-mobile/chat/pinned-v1';
 const CHAT_SYNC_KEY = '@openx-mobile/chat/sync-v1';
+const CHAT_DEVICE_KEY = '@openx-mobile/chat/device-key-v1';
 const MAX_RELATIONSHIP_MESSAGES = 200;
+const CHAT_SYNC_INTERVAL_MS = 15000;
+const MESSAGE_RUNTIME_ERROR = 'Secure chat runtime is unavailable on this device build.';
 const CHAT_FILTERS = [
   { label: 'All', value: 'all' },
   { label: 'Unread', value: 'unread' },
@@ -38,6 +40,17 @@ const emptyChatState = {
   apiBaseUrl: DEFAULT_CHAT_API,
   username: '',
 };
+
+export const MOBILE_CHAT_STORAGE_KEYS = Object.freeze([
+  CHAT_SESSION_KEY,
+  CHAT_MESSAGES_KEY,
+  CHAT_PINNED_KEY,
+  CHAT_SYNC_KEY,
+]);
+
+export async function clearMobileChatStorage() {
+  await AsyncStorage.multiRemove(MOBILE_CHAT_STORAGE_KEYS);
+}
 
 const parseJson = (value, fallback) => {
   try {
@@ -65,23 +78,58 @@ const relationshipTitle = (relationship, ownAccountId) => {
   return String(label || 'OpenX user').replace(/\s+/g, ' ').trim();
 };
 
-const makeLocalMessage = (input = {}) => ({
-  id: input.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-  relationshipId: input.relationshipId,
-  direction: input.direction || 'outgoing',
-  text: String(input.text || '').trim().slice(0, 2000),
-  status: input.status || 'sent',
-  createdAt: input.createdAt || new Date().toISOString(),
-});
+const normalizeMessageDirection = (value) => (value === 'incoming' ? 'incoming' : 'outgoing');
 
-const pruneMessagesByRelationship = (messages = {}) => Object.fromEntries(
-  Object.entries(messages || {}).map(([relationshipId, items]) => [
+const makeLocalMessage = (input = {}) => {
+  const relationshipId = String(input.relationshipId || '').trim();
+  if (!relationshipId) return null;
+  return {
+    id: String(input.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`).slice(0, 96),
     relationshipId,
-    Array.isArray(items)
-      ? items.filter((item) => item?.id && item?.relationshipId).slice(-MAX_RELATIONSHIP_MESSAGES)
-      : [],
-  ]),
+    direction: normalizeMessageDirection(input.direction),
+    text: String(input.text || '').replace(/\s+/g, ' ').trim().slice(0, 2000),
+    status: String(input.status || 'sent').slice(0, 40),
+    createdAt: Number.isFinite(Date.parse(input.createdAt)) ? input.createdAt : new Date().toISOString(),
+  };
+};
+
+const pruneMessagesByRelationship = (messages = {}) => {
+  if (!messages || typeof messages !== 'object' || Array.isArray(messages)) return {};
+  return Object.fromEntries(
+    Object.entries(messages).map(([relationshipId, items]) => [
+      relationshipId,
+      Array.isArray(items)
+        ? items.map((item) => makeLocalMessage({ ...item, relationshipId: item?.relationshipId || relationshipId })).filter(Boolean).slice(-MAX_RELATIONSHIP_MESSAGES)
+        : [],
+    ]),
+  );
+};
+
+const normalizePinnedRelationships = (value) => (
+  Array.isArray(value) ? [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 20) : []
 );
+
+const normalizeSyncCursor = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([deviceId, sequence]) => [
+    String(deviceId || '').trim(),
+    Math.max(0, Number(sequence || 0)),
+  ]).filter(([deviceId, sequence]) => deviceId && Number.isFinite(sequence)));
+};
+
+const normalizeChatSession = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return emptyChatState;
+  const account = value.account && typeof value.account === 'object' ? value.account : null;
+  const device = value.device && typeof value.device === 'object' ? value.device : null;
+  return {
+    ...emptyChatState,
+    ...value,
+    account,
+    device,
+    apiBaseUrl: value.apiBaseUrl || DEFAULT_CHAT_API,
+    username: String(value.username || account?.username || '').trim(),
+  };
+};
 
 const mergeRelationshipMessages = (current = {}, additions = []) => {
   if (!additions.length) return current;
@@ -117,7 +165,72 @@ const localMessageFromEnvelope = (envelope = {}, accountId = '', received = null
   });
 };
 
-export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNotice, topPadding = 0 }) {
+const relationshipSessionSeed = (context = {}) => {
+  const envelopeMetadata = context.envelope?.metadata || {};
+  const metadata = context.metadata || envelopeMetadata;
+  const relationshipId = String(context.relationshipId || metadata.relationshipId || '').trim();
+  const accountIds = [
+    context.senderAccountId || metadata.senderAccountId,
+    context.recipientAccountId || metadata.recipientAccountId,
+  ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean).sort();
+  if (!relationshipId || accountIds.length < 2) return null;
+  return `OpenXChat:relationship-session:v1:${relationshipId}:${accountIds.join(':')}`;
+};
+
+export async function resolveRelationshipSessionKey(context = {}) {
+  const seed = relationshipSessionSeed(context);
+  if (!seed) return null;
+  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, seed);
+}
+
+class MobileChatErrorBoundary extends Component {
+  state = { error: null, resetCount: 0 };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    this.props.showNotice?.({
+      title: 'Chat recovered',
+      message: error?.message || 'The chat view hit an unexpected error.',
+      tone: 'error',
+    });
+  }
+
+  recover = async () => {
+    await clearMobileChatStorage();
+    this.setState((current) => ({ error: null, resetCount: current.resetCount + 1 }));
+  };
+
+  render() {
+    if (!this.state.error) {
+      return (
+        <MobileChatPanelContent
+          key={this.state.resetCount}
+          {...this.props}
+        />
+      );
+    }
+    return (
+      <View style={[styles.container, styles.recoveryPanel, { paddingTop: this.props.topPadding, paddingBottom: this.props.bottomPadding }]}>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>Chat needs to recover</Text>
+          <Text style={styles.emptyText}>Local chat state will be reset. Your server account and accepted contacts remain available after signing in.</Text>
+          <Pressable accessibilityRole="button" onPress={this.recover} style={styles.primaryButton}>
+            <Text style={styles.primaryButtonText}>Restart Chat</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+}
+
+export default function MobileChatPanel(props) {
+  return <MobileChatErrorBoundary {...props} />;
+}
+
+function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, topPadding = 0 }) {
   const [session, setSession] = useState(emptyChatState);
   const [serverUrl, setServerUrl] = useState(DEFAULT_CHAT_API);
   const [username, setUsername] = useState('');
@@ -152,10 +265,11 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
   const accountService = useMemo(() => new AccountService({ apiBaseUrl }), [apiBaseUrl]);
 
   const persistSession = useCallback(async (nextSession) => {
-    setSession(nextSession);
-    setServerUrl(nextSession.apiBaseUrl || DEFAULT_CHAT_API);
-    setUsername(nextSession.username || nextSession.account?.username || '');
-    await AsyncStorage.setItem(CHAT_SESSION_KEY, JSON.stringify(nextSession));
+    const normalized = normalizeChatSession(nextSession);
+    setSession(normalized);
+    setServerUrl(normalized.apiBaseUrl || DEFAULT_CHAT_API);
+    setUsername(normalized.username || normalized.account?.username || '');
+    await AsyncStorage.setItem(CHAT_SESSION_KEY, JSON.stringify(normalized));
   }, []);
 
   const persistMessages = useCallback(async (nextMessages) => {
@@ -166,13 +280,15 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
   }, []);
 
   const persistPinned = useCallback(async (nextPinned) => {
-    setPinnedRelationships(nextPinned);
-    await AsyncStorage.setItem(CHAT_PINNED_KEY, JSON.stringify(nextPinned));
+    const normalized = normalizePinnedRelationships(nextPinned);
+    setPinnedRelationships(normalized);
+    await AsyncStorage.setItem(CHAT_PINNED_KEY, JSON.stringify(normalized));
   }, []);
 
   const persistSyncCursor = useCallback(async (nextCursor) => {
-    syncCursorRef.current = nextCursor;
-    await AsyncStorage.setItem(CHAT_SYNC_KEY, JSON.stringify(nextCursor));
+    const normalized = normalizeSyncCursor(nextCursor);
+    syncCursorRef.current = normalized;
+    await AsyncStorage.setItem(CHAT_SYNC_KEY, JSON.stringify(normalized));
   }, []);
 
   const loadLocalChat = useCallback(async () => {
@@ -182,20 +298,27 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
       CHAT_PINNED_KEY,
       CHAT_SYNC_KEY,
     ]);
-    const parsedSession = parseJson(savedSession, emptyChatState);
+    const parsedSession = normalizeChatSession(parseJson(savedSession, emptyChatState));
     const parsedMessages = parseJson(savedMessages, {});
-    const parsedPinned = parseJson(savedPinned, []);
-    const parsedSync = parseJson(savedSync, {});
-    setSession({ ...emptyChatState, ...parsedSession });
+    const parsedPinned = normalizePinnedRelationships(parseJson(savedPinned, []));
+    const parsedSync = normalizeSyncCursor(parseJson(savedSync, {}));
+    setSession(parsedSession);
     setServerUrl(parsedSession.apiBaseUrl || DEFAULT_CHAT_API);
     setUsername(parsedSession.username || parsedSession.account?.username || '');
     const normalizedMessages = pruneMessagesByRelationship(parsedMessages);
     messagesByRelationshipRef.current = normalizedMessages;
     setMessagesByRelationship(normalizedMessages);
-    setPinnedRelationships(Array.isArray(parsedPinned) ? parsedPinned : []);
-    const normalizedSync = parsedSync && typeof parsedSync === 'object' && !Array.isArray(parsedSync) ? parsedSync : {};
-    syncCursorRef.current = normalizedSync;
+    setPinnedRelationships(parsedPinned);
+    syncCursorRef.current = parsedSync;
     setLoaded(true);
+  }, []);
+
+  const getClientDeviceKey = useCallback(async () => {
+    const existing = await AsyncStorage.getItem(CHAT_DEVICE_KEY);
+    if (existing) return existing;
+    const next = Crypto.randomUUID();
+    await AsyncStorage.setItem(CHAT_DEVICE_KEY, next);
+    return next;
   }, []);
 
   const registerDevice = useCallback(async (service, account) => {
@@ -219,14 +342,16 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
       },
       clientDeviceKey,
     });
-    const clientDeviceKey = Crypto.randomUUID();
+    const clientDeviceKey = await getClientDeviceKey();
     try {
       return await createDevice(clientDeviceKey);
     } catch (error) {
       if (error.code !== 'device.duplicate') throw error;
-      return createDevice(Crypto.randomUUID());
+      const replacementKey = Crypto.randomUUID();
+      await AsyncStorage.setItem(CHAT_DEVICE_KEY, replacementKey);
+      return createDevice(replacementKey);
     }
-  }, [deviceName]);
+  }, [deviceName, getClientDeviceKey]);
 
   const refreshChat = useCallback(async () => {
     if (!accountId) return;
@@ -302,15 +427,21 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
   }, [authMode, password, persistSession, registerDevice, serverUrl, showNotice, username]);
 
   const handleSignOut = useCallback(async () => {
-    await AsyncStorage.multiRemove([CHAT_SESSION_KEY, CHAT_MESSAGES_KEY, CHAT_SYNC_KEY]);
+    await clearMobileChatStorage();
     setSession(emptyChatState);
+    setPassword('');
+    setSearch('');
+    setAddUsername('');
+    setAddOpen(false);
     setRelationships([]);
     setIncomingRequests([]);
     setOutgoingRequests([]);
     setActiveRelationshipId('');
+    messageManagerRef.current = null;
     messagesByRelationshipRef.current = {};
     syncCursorRef.current = {};
     setMessagesByRelationship({});
+    setPinnedRelationships([]);
   }, []);
 
   const handleAddUser = useCallback(async () => {
@@ -388,14 +519,22 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
 
   const getMessageManager = useCallback(() => {
     if (!messageManagerRef.current || messageManagerRef.current.config.apiBaseUrl !== apiBaseUrl) {
-      messageManagerRef.current = new MessageManager({
-        config: {
-          apiBaseUrl,
-          requireSessionKey: false,
-          allowEphemeralSessionKey: true,
-          requestTimeoutMs: 15000,
-        },
-      });
+      try {
+        const MessageManager = require('../chat/messages/MessageManager').default;
+        messageManagerRef.current = new MessageManager({
+          config: {
+            apiBaseUrl,
+            requireSessionKey: true,
+            allowEphemeralSessionKey: false,
+            requestTimeoutMs: 15000,
+          },
+          sessionResolver: resolveRelationshipSessionKey,
+        });
+      } catch (error) {
+        const runtimeError = new Error(MESSAGE_RUNTIME_ERROR);
+        runtimeError.cause = error;
+        throw runtimeError;
+      }
     }
     return messageManagerRef.current;
   }, [apiBaseUrl]);
@@ -475,6 +614,14 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
     return () => subscription.remove();
   }, [accountId, loaded, refreshChatWithSync]);
 
+  useEffect(() => {
+    if (!loaded || !accountId) return undefined;
+    const timer = setInterval(() => {
+      refreshChatWithSync({ silent: true });
+    }, CHAT_SYNC_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [accountId, loaded, refreshChatWithSync]);
+
   const sendChatMessage = useCallback(async () => {
     const text = messageText.replace(/\s+/g, ' ').trim();
     if (!text || !activeRelationship || !session.device?.deviceId || !accountId) return;
@@ -500,7 +647,11 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
       const sent = {
         ...optimistic,
         id: result.message?.messageId || optimistic.id,
-        status: result.delivery?.deliveredCount > 0 ? 'delivered' : 'queued',
+        status: Number(result.delivery?.result?.deliveredCount || result.delivery?.deliveredCount || 0) > 0
+          ? 'delivered'
+          : result.delivery?.queued
+            ? 'queued'
+            : 'sent',
       };
       await persistMessages({
         ...nextMessages,
@@ -616,13 +767,18 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
         <FlatList
           contentContainerStyle={styles.threadList}
           data={activeMessages}
+          initialNumToRender={18}
           keyExtractor={(item) => item.id}
+          maxToRenderPerBatch={8}
+          removeClippedSubviews={Platform.OS === 'android'}
           renderItem={({ item }) => (
             <View style={[styles.messageBubble, item.direction === 'outgoing' ? styles.messageOutgoing : styles.messageIncoming]}>
               <Text style={[styles.messageText, item.direction === 'incoming' && styles.messageTextIncoming]}>{item.text}</Text>
               <Text style={[styles.messageStatus, item.direction === 'incoming' && styles.messageStatusIncoming]}>{item.status}</Text>
             </View>
           )}
+          updateCellsBatchingPeriod={48}
+          windowSize={7}
         />
         <View style={styles.chatComposer}>
           <TextInput
@@ -732,6 +888,7 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
       <FlatList
         contentContainerStyle={[styles.chatList, { paddingBottom: bottomPadding + spacing.xl }]}
         data={filteredRelationships}
+        initialNumToRender={14}
         keyExtractor={(item) => item.relationshipId}
         ListEmptyComponent={(
           <View style={styles.emptyState}>
@@ -763,6 +920,10 @@ export default function MobileChatPanel({ bottomPadding = 0, deviceName, showNot
             </Pressable>
           );
         }}
+        maxToRenderPerBatch={8}
+        removeClippedSubviews={Platform.OS === 'android'}
+        updateCellsBatchingPeriod={48}
+        windowSize={7}
       />
     </View>
   );
@@ -772,6 +933,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     paddingHorizontal: spacing.lg,
+  },
+  recoveryPanel: {
+    justifyContent: 'center',
   },
   authPanel: {
     ...shadows.card,

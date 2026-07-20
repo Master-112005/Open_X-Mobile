@@ -23,7 +23,12 @@ export class SequenceManager {
   async load() {
     if (this.loaded) return;
     const raw = await this.storage.getItem(this.config.sequenceStorageKey);
-    const parsed = raw ? JSON.parse(raw) : null;
+    let parsed = null;
+    try {
+      parsed = raw ? JSON.parse(raw) : null;
+    } catch {
+      await this.storage.removeItem(this.config.sequenceStorageKey);
+    }
     for (const [deviceId, sequence] of Object.entries(parsed?.sequences || {})) this.sequences.set(deviceId, Number(sequence || 0));
     this.loaded = true;
   }
