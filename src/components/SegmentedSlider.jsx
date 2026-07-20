@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { colors, radius, shadows, spacing } from '../styles/theme';
+import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
 export default function SegmentedSlider({
   accessibilityLabel,
@@ -13,8 +14,11 @@ export default function SegmentedSlider({
   textStyle,
 }) {
   return (
-    <View
+    <LinearGradient
       accessibilityLabel={accessibilityLabel}
+      colors={gradients.glassDark}
+      end={{ x: 1, y: 1 }}
+      start={{ x: 0, y: 0 }}
       style={[styles.track, style]}
     >
       {options.map((option) => {
@@ -33,11 +37,16 @@ export default function SegmentedSlider({
             style={({ pressed }) => [
               styles.segment,
               segmentStyle,
-              selected && styles.segmentActive,
               pressed && styles.segmentPressed,
               option.disabled && styles.segmentDisabled,
             ]}
           >
+            <LinearGradient
+              colors={selected ? gradients.primary : ['rgba(255,255,255,0)', 'rgba(255,255,255,0)']}
+              end={{ x: 1, y: 1 }}
+              start={{ x: 0, y: 0 }}
+              style={[styles.segmentFill, selected && styles.segmentActive]}
+            >
             <View style={[styles.segmentContent, !showLabel && styles.segmentContentIconOnly]}>
               {iconName ? (
                 <Ionicons
@@ -60,10 +69,11 @@ export default function SegmentedSlider({
                 </Text>
               ) : null}
             </View>
+            </LinearGradient>
           </Pressable>
         );
       })}
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -71,25 +81,32 @@ const styles = StyleSheet.create({
   track: {
     ...shadows.card,
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.13)',
     borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 4,
-    minHeight: 54,
+    gap: 2,
+    minHeight: 56,
     overflow: 'hidden',
-    padding: 3,
+    padding: 4,
     width: '100%',
   },
   segment: {
     alignItems: 'center',
     borderRadius: radius.round,
     flex: 1,
-    height: 46,
+    height: 48,
     justifyContent: 'center',
     minWidth: 0,
+    overflow: 'hidden',
+  },
+  segmentFill: {
+    alignItems: 'center',
+    borderRadius: radius.round,
+    flex: 1,
+    justifyContent: 'center',
     paddingHorizontal: spacing.sm,
+    width: '100%',
   },
   segmentContent: {
     alignItems: 'center',
@@ -102,7 +119,8 @@ const styles = StyleSheet.create({
     gap: 0,
   },
   segmentActive: {
-    backgroundColor: colors.white,
+    borderColor: 'rgba(255,255,255,0.65)',
+    borderWidth: 1,
   },
   segmentPressed: {
     opacity: 0.82,

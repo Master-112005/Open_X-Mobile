@@ -751,10 +751,6 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     return (
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { paddingTop, paddingBottom: bottomPadding }]}>
         <View style={styles.threadHeader}>
-          <View>
-            <Text numberOfLines={1} style={styles.threadTitle}>{relationshipTitle(activeRelationship, accountId)}</Text>
-            <Text style={styles.threadMeta}>{activeMessages.length} messages</Text>
-          </View>
           <Pressable
             accessibilityLabel="Back to chat list"
             accessibilityRole="button"
@@ -763,6 +759,10 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
           >
             <Ionicons color={colors.text} name="chevron-back" size={22} />
           </Pressable>
+          <View>
+            <Text numberOfLines={1} style={styles.threadTitle}>{relationshipTitle(activeRelationship, accountId)}</Text>
+            <Text style={styles.threadMeta}>{activeMessages.length} messages</Text>
+          </View>
         </View>
         <FlatList
           contentContainerStyle={styles.threadList}
@@ -777,6 +777,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
               <Text style={[styles.messageStatus, item.direction === 'incoming' && styles.messageStatusIncoming]}>{item.status}</Text>
             </View>
           )}
+          showsVerticalScrollIndicator={false}
           updateCellsBatchingPeriod={48}
           windowSize={7}
         />
@@ -922,6 +923,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
         }}
         maxToRenderPerBatch={8}
         removeClippedSubviews={Platform.OS === 'android'}
+        showsVerticalScrollIndicator={false}
         updateCellsBatchingPeriod={48}
         windowSize={7}
       />
@@ -938,17 +940,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   authPanel: {
-    ...shadows.card,
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    ...shadows.floating,
+    backgroundColor: colors.contentElevated,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     gap: spacing.md,
-    padding: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.xl,
   },
   title: {
     color: colors.text,
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: '900',
   },
   subtitle: {
@@ -963,7 +966,7 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: colors.glassSubtle,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.round,
     borderWidth: 1,
     color: colors.text,
     fontSize: 14,
@@ -992,12 +995,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   iconButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 42,
@@ -1005,14 +1008,14 @@ const styles = StyleSheet.create({
     width: 42,
   },
   searchInput: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
     borderRadius: radius.round,
     borderWidth: 1,
     color: colors.text,
     fontSize: 14,
     height: 48,
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
     paddingHorizontal: spacing.lg,
   },
   filterRow: {
@@ -1035,9 +1038,9 @@ const styles = StyleSheet.create({
   },
   addPanel: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.contentElevated,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
@@ -1065,9 +1068,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   requestsPanel: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.contentElevated,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     marginBottom: spacing.md,
     padding: spacing.md,
@@ -1115,19 +1118,19 @@ const styles = StyleSheet.create({
   },
   chatRow: {
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.md,
-    minHeight: 72,
+    minHeight: 76,
     paddingHorizontal: spacing.md,
   },
   avatar: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 46,
@@ -1181,14 +1184,14 @@ const styles = StyleSheet.create({
   threadHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
+    gap: spacing.md,
+    marginBottom: spacing.lg,
   },
   threadTitle: {
     color: colors.text,
     fontSize: 22,
     fontWeight: '900',
-    maxWidth: 250,
+    maxWidth: 260,
   },
   threadMeta: {
     color: colors.textMuted,
@@ -1203,7 +1206,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
   },
   messageBubble: {
-    borderRadius: 20,
+    borderRadius: radius.lg,
     maxWidth: '82%',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -1214,7 +1217,7 @@ const styles = StyleSheet.create({
   },
   messageIncoming: {
     alignSelf: 'flex-start',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
     borderWidth: 1,
   },
@@ -1239,9 +1242,10 @@ const styles = StyleSheet.create({
   },
   chatComposer: {
     alignItems: 'flex-end',
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: 28,
+    ...shadows.floating,
+    backgroundColor: colors.contentElevated,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,

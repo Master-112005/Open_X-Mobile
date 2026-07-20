@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AppProvider } from './src/context/AppContext';
 import AppNavigator from './src/navigation/AppNavigator';
+import { colors, radius } from './src/styles/theme';
 
 class AppErrorBoundary extends Component {
   state = { error: null, recoveryKey: 0 };
@@ -99,7 +100,7 @@ export default function App() {
 const styles = StyleSheet.create({
   launch: {
     alignItems: 'center',
-    backgroundColor: '#000000',
+    backgroundColor: colors.background,
     bottom: 0,
     justifyContent: 'center',
     left: 0,
@@ -109,13 +110,13 @@ const styles = StyleSheet.create({
   },
   launchMark: { alignItems: 'center' },
   launchTitle: {
-    color: '#FFFFFF',
+    color: colors.text,
     fontSize: 34,
     fontWeight: '900',
     letterSpacing: 0,
   },
   launchSubtitle: {
-    color: 'rgba(255,255,255,0.62)',
+    color: colors.textSecondary,
     fontSize: 15,
     fontWeight: '700',
     letterSpacing: 0,
@@ -123,33 +124,33 @@ const styles = StyleSheet.create({
   },
   recovery: {
     alignItems: 'center',
-    backgroundColor: '#070B14',
+    backgroundColor: colors.background,
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 28,
   },
   recoveryTitle: {
-    color: '#FFFFFF',
+    color: colors.text,
     fontSize: 24,
     fontWeight: '800',
     textAlign: 'center',
   },
   recoveryText: {
-    color: 'rgba(255,255,255,0.68)',
+    color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 21,
     marginTop: 12,
     textAlign: 'center',
   },
   recoveryButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 999,
+    backgroundColor: colors.white,
+    borderRadius: radius.round,
     marginTop: 24,
     paddingHorizontal: 22,
     paddingVertical: 13,
   },
   recoveryButtonText: {
-    color: '#070B14',
+    color: colors.background,
     fontSize: 14,
     fontWeight: '800',
   },

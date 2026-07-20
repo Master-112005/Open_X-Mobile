@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import ChatBubble from '../components/ChatBubble';
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import ScreenBackground from '../components/ScreenBackground';
 import SegmentedSlider from '../components/SegmentedSlider';
 import { useApp } from '../context/AppContext';
 import MobileChatPanel from './MobileChatPanel';
@@ -227,7 +228,7 @@ export default function HomeScreen({ navigation }) {
   }, [reconnectActiveConnection, showNotice]);
 
   return (
-    <View style={styles.screen}>
+    <ScreenBackground>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
@@ -347,7 +348,7 @@ export default function HomeScreen({ navigation }) {
                 ]}
               >
                 <Ionicons
-                  color={colors.text}
+                  color={colors.background}
                   name={selectedFile ? 'cloud-upload-outline' : 'send'}
                   size={20}
                 />
@@ -406,13 +407,12 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
       </Modal>
-    </View>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: colors.background,
     flex: 1,
   },
   topLayer: {
@@ -439,13 +439,13 @@ const styles = StyleSheet.create({
   },
   connectionPill: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderColor: colors.border,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
-    height: 22,
+    height: 24,
     justifyContent: 'center',
-    width: 22,
+    width: 24,
   },
   connectionSpinner: {
     borderColor: 'rgba(255,255,255,0.16)',
@@ -471,7 +471,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   assistantDock: {
-    backgroundColor: colors.background,
     bottom: 0,
     gap: spacing.sm,
     left: 0,
@@ -482,7 +481,6 @@ const styles = StyleSheet.create({
     zIndex: 24,
   },
   actionDock: {
-    backgroundColor: colors.background,
     bottom: 0,
     left: 0,
     paddingHorizontal: spacing.lg,
@@ -492,10 +490,10 @@ const styles = StyleSheet.create({
     zIndex: 24,
   },
   composer: {
-    ...shadows.card,
+    ...shadows.floating,
     alignItems: 'flex-end',
-    borderColor: colors.border,
-    borderRadius: 28,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     minHeight: 58,
@@ -503,7 +501,7 @@ const styles = StyleSheet.create({
   },
   addButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.glassStrong,
     borderRadius: radius.round,
     height: 46,
     justifyContent: 'center',
@@ -526,8 +524,8 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
+    backgroundColor: colors.white,
+    borderColor: colors.white,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 46,
@@ -594,9 +592,9 @@ const styles = StyleSheet.create({
   },
   previewPanel: {
     ...shadows.card,
-    backgroundColor: 'rgba(18,18,22,0.96)',
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
-    borderRadius: 24,
+    borderRadius: radius.xl,
     borderWidth: 1,
     maxHeight: '82%',
     overflow: 'hidden',
@@ -620,7 +618,7 @@ const styles = StyleSheet.create({
   previewMedia: {
     alignItems: 'center',
     aspectRatio: 1,
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.content,
     borderColor: colors.border,
     borderRadius: 18,
     borderWidth: 1,

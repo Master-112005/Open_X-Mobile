@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
@@ -151,7 +152,7 @@ export default function SettingsScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <ScreenBackground>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.screen}
@@ -169,7 +170,16 @@ export default function SettingsScreen({ navigation }) {
         >
           <Text style={styles.title}>Settings</Text>
 
-          <Section title="Device">
+          <Section title="Profile">
+            <SettingRow
+              iconName="person-circle-outline"
+              label="Profile"
+              onPress={() => navigation.navigate('Profile')}
+              status={profileReady ? 'Saved' : 'Not set'}
+            />
+          </Section>
+
+          <Section title="System">
             <View style={styles.nameRow}>
               <View style={styles.rowIcon}>
                 <Ionicons color={colors.text} name="phone-portrait-outline" size={20} />
@@ -210,54 +220,39 @@ export default function SettingsScreen({ navigation }) {
               label="Cloud relay"
               status={activeStatusText}
             />
-          </Section>
-
-          <Section title="Account">
-            <SettingRow
-              iconName="person-circle-outline"
-              label="Profile"
-              onPress={() => navigation.navigate('Profile')}
-              status={profileReady ? 'Saved' : 'Not set'}
-            />
-          </Section>
-
-          <Section title="Connection">
+            {sectionDivider(2)}
             <SettingRow
               iconName="qr-code-outline"
               label="Pair desktop"
               onPress={() => navigation.navigate('QRPairing')}
               status={paired ? 'Paired' : 'Not paired'}
             />
-            {sectionDivider(1)}
+            {sectionDivider(3)}
             <SettingRow
               connected={sessionValid}
               iconName="shield-checkmark-outline"
               label="Session"
               status={sessionValid ? 'Active' : 'Reconnect'}
             />
-          </Section>
-
-          <Section title="Features">
+            {sectionDivider(4)}
             <SettingRow
               iconName="calendar-outline"
               label="Calendar"
               onPress={() => navigation.navigate('Calendar')}
               status={`${scheduleCount} saved`}
             />
-            {sectionDivider(1)}
+            {sectionDivider(5)}
             <SettingRow
               iconName="folder-open-outline"
               label="Files"
               onPress={() => navigation.navigate('Transfers')}
               status={`${receivedCount} received`}
             />
-          </Section>
-
-          <Section title="Desktop access">
+            {sectionDivider(6)}
             {permissionsLoaded ? (
               PERMISSION_ITEMS.map((item, index) => (
                 <View key={item.key}>
-                  {sectionDivider(index)}
+                  {sectionDivider(index + 7)}
                   <SettingRow
                     connected={permissions?.[item.key] === true}
                     iconName={item.iconName}
@@ -282,13 +277,12 @@ export default function SettingsScreen({ navigation }) {
           navigation={navigation}
         />
       </KeyboardAvoidingView>
-    </View>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: colors.background,
     flex: 1,
   },
   content: {
@@ -296,7 +290,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: '900',
     marginBottom: spacing.xl,
   },
@@ -312,7 +306,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   sectionPanel: {
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
   },
   sectionContent: {
     paddingHorizontal: spacing.md,
@@ -334,9 +328,9 @@ const styles = StyleSheet.create({
   },
   rowIcon: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.md,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
+    borderRadius: radius.lg,
     borderWidth: 1,
     height: 42,
     justifyContent: 'center',
@@ -359,9 +353,9 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
   nameInput: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.content,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.round,
     borderWidth: 1,
     color: colors.text,
     flex: 1,

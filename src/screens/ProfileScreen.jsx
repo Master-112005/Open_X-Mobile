@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { colors, radius, spacing } from '../styles/theme';
 
@@ -153,7 +154,7 @@ export default function ProfileScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <ScreenBackground>
       <ScrollView
         contentContainerStyle={[
           styles.content,
@@ -266,13 +267,12 @@ export default function ProfileScreen({ navigation }) {
         activeRoute="Settings"
         navigation={navigation}
       />
-    </View>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: colors.background,
     flex: 1,
   },
   pressed: {
@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: '900',
   },
   subtitle: {
@@ -295,7 +295,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   heroCard: {
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     marginTop: spacing.xl,
   },
   heroContent: {
@@ -306,9 +306,9 @@ const styles = StyleSheet.create({
   },
   avatar: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     height: 58,
     justifyContent: 'center',
@@ -376,8 +376,8 @@ const styles = StyleSheet.create({
   },
   editButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 38,
@@ -385,7 +385,7 @@ const styles = StyleSheet.create({
     width: 38,
   },
   card: {
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
   },
   cardContent: {
     padding: spacing.lg,
@@ -431,9 +431,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   input: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.content,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.round,
     borderWidth: 1,
     color: colors.text,
     fontSize: 14,
@@ -443,16 +443,16 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.borderBright,
+    backgroundColor: colors.white,
+    borderColor: colors.white,
     borderWidth: 1,
-    borderRadius: radius.md,
+    borderRadius: radius.round,
     flex: 1,
     justifyContent: 'center',
     minHeight: 46,
   },
   saveButtonText: {
-    color: colors.text,
+    color: colors.background,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -468,7 +468,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'transparent',
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.round,
     borderWidth: 1,
     flex: 1,
     justifyContent: 'center',

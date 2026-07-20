@@ -69,7 +69,7 @@ export default function OpenXNotice({ notice, onDismiss }) {
 const styles = StyleSheet.create({
   overlay: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.72)',
+    backgroundColor: 'rgba(2,5,12,0.76)',
     flex: 1,
     justifyContent: 'center',
     padding: spacing.xl,
@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
   content: { alignItems: 'center', padding: spacing.xl },
   icon: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.contentElevated,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 58,
@@ -108,16 +108,16 @@ const styles = StyleSheet.create({
   },
   button: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
     borderRadius: radius.round,
     borderWidth: 1,
     flex: 1,
     justifyContent: 'center',
-    minHeight: 46,
+    minHeight: 48,
     paddingHorizontal: spacing.md,
   },
-  primaryButton: { backgroundColor: 'rgba(255,255,255,0.18)', borderColor: colors.borderBright },
+  primaryButton: { backgroundColor: colors.glassFrosted, borderColor: colors.borderBright },
   dangerButton: { backgroundColor: 'rgba(255,102,117,0.16)', borderColor: 'rgba(255,102,117,0.5)' },
   buttonText: { color: colors.text, fontSize: 13, fontWeight: '900' },
   pressed: { opacity: 0.76, transform: [{ scale: 0.98 }] },

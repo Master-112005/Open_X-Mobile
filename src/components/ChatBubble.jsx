@@ -311,7 +311,7 @@ function ChatBubble({ message, onChoice, onPreview }) {
           isUser ? styles.userContent : styles.assistantContent,
         ]}
       >
-        <Text style={styles.message}>{message.text}</Text>
+        <Text style={[styles.message, isUser && styles.userMessage]}>{message.text}</Text>
         <ResultCards entries={resultEntries} onPreview={onPreview} visual={visualResults} />
         <ChoiceCards choices={choices} onChoice={onChoice} />
         <Text style={[styles.time, isUser && styles.userTime]}>
@@ -335,9 +335,9 @@ const styles = StyleSheet.create({
   assistantRow: { alignSelf: 'flex-start' },
   content: {
     ...shadows.card,
-    backgroundColor: colors.glass,
+    backgroundColor: colors.content,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     maxWidth: '100%',
     minWidth: 0,
@@ -345,16 +345,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   userContent: {
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    borderBottomRightRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderBottomRightRadius: 11,
   },
   assistantContent: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderBottomLeftRadius: 8,
+    backgroundColor: colors.contentElevated,
+    borderBottomLeftRadius: 11,
   },
-  message: { color: colors.text, fontSize: 15, lineHeight: 22 },
+  message: { color: colors.text, fontSize: 15, fontWeight: '600', lineHeight: 22 },
+  userMessage: {
+    color: colors.background,
+  },
   time: { color: colors.textMuted, fontSize: 10, marginTop: 7 },
-  userTime: { color: colors.textSecondary, textAlign: 'right' },
+  userTime: { color: 'rgba(3,5,10,0.5)', textAlign: 'right' },
   resultList: {
     gap: spacing.sm,
     marginTop: spacing.md,
@@ -369,9 +372,9 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   visualResultCard: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     overflow: 'hidden',
     width: 142,
@@ -407,9 +410,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   resultCard: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,
@@ -442,9 +445,9 @@ const styles = StyleSheet.create({
   },
   choiceCard: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.surface,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,

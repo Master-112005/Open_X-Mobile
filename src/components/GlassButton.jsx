@@ -6,7 +6,7 @@ import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
 const toneGradients = {
   primary: gradients.primary,
-  secondary: gradients.glass,
+  secondary: gradients.glassDark,
   quiet: gradients.glassSoft,
   danger: gradients.dangerSoft,
 };
@@ -70,15 +70,15 @@ export default function GlassButton({
 
 const styles = StyleSheet.create({
   pressable: {
-    borderRadius: radius.lg,
+    borderRadius: radius.round,
     minHeight: 52,
     overflow: 'hidden',
   },
   button: {
-    ...shadows.card,
+    ...shadows.floating,
     alignItems: 'center',
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderColor: colors.borderBright,
+    borderRadius: radius.round,
     borderWidth: 1,
     flexDirection: 'row',
     justifyContent: 'center',
@@ -86,7 +86,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   primaryButton: {
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.68)',
   },
   pressed: {
     opacity: 0.82,
@@ -97,9 +97,9 @@ const styles = StyleSheet.create({
   },
   iconShell: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.glass,
     borderColor: colors.border,
-    borderRadius: radius.md,
+    borderRadius: radius.round,
     borderWidth: 1,
     height: 30,
     justifyContent: 'center',
@@ -113,7 +113,7 @@ const styles = StyleSheet.create({
   label: {
     color: colors.text,
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   primaryLabel: {
     color: colors.white,

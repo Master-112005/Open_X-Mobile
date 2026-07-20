@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import GlassPanel from '../components/GlassPanel';
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { formatFileSize } from '../services/fileTransfer';
 import { colors, radius, spacing } from '../styles/theme';
@@ -181,7 +182,7 @@ export default function TransfersScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <ScreenBackground>
       <View style={[styles.titleBlock, { paddingTop: insets.top + spacing.lg }]}>
         <Text style={styles.title}>Files</Text>
       </View>
@@ -281,13 +282,12 @@ export default function TransfersScreen({ navigation }) {
         activeRoute="Transfers"
         navigation={navigation}
       />
-    </View>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: colors.background,
     flex: 1,
   },
   pressed: {
@@ -300,7 +300,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: '900',
   },
   center: {
@@ -313,10 +313,10 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   row: {
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
   },
   rowPressable: {
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
   },
   rowContent: {
     alignItems: 'center',
@@ -326,9 +326,9 @@ const styles = StyleSheet.create({
   },
   fileMark: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     height: 48,
     justifyContent: 'center',
@@ -387,9 +387,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   sheetCard: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: 28,
+    backgroundColor: colors.contentElevated,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     padding: spacing.lg,
   },
@@ -408,9 +408,9 @@ const styles = StyleSheet.create({
   },
   sheetIcon: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     height: 48,
     justifyContent: 'center',
@@ -441,9 +441,9 @@ const styles = StyleSheet.create({
   },
   sheetButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.content,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.sm,

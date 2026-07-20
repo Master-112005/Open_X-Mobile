@@ -1,18 +1,19 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import SegmentedSlider from './SegmentedSlider';
-import { colors, radius, spacing } from '../styles/theme';
+import { colors, gradients, radius, spacing, shadows } from '../styles/theme';
 
 export const MOBILE_BOTTOM_OPTIONS = [
   { label: 'Home', value: 'Home', iconName: 'sparkles-outline', activeIconName: 'sparkles', showLabel: false },
-  { label: 'Files', value: 'Transfers', iconName: 'folder-open-outline', showLabel: false },
-  { label: 'Calendar', value: 'Calendar', iconName: 'calendar-outline', showLabel: false },
-  { label: 'Pair', value: 'QRPairing', iconName: 'qr-code-outline', showLabel: false },
-  { label: 'Settings', value: 'Settings', iconName: 'settings-outline', showLabel: false },
+  { label: 'Files', value: 'Transfers', iconName: 'folder-open-outline', activeIconName: 'folder-open', showLabel: false },
+  { label: 'Calendar', value: 'Calendar', iconName: 'calendar-outline', activeIconName: 'calendar', showLabel: false },
+  { label: 'Pair', value: 'QRPairing', iconName: 'qr-code-outline', activeIconName: 'qr-code', showLabel: false },
+  { label: 'Settings', value: 'Settings', iconName: 'settings-outline', activeIconName: 'settings', showLabel: false },
 ];
 
-export const MOBILE_BOTTOM_DOCK_CONTENT_HEIGHT = 62;
+export const MOBILE_BOTTOM_DOCK_CONTENT_HEIGHT = 66;
 
 export function getMobileBottomDockHeight(insets = {}) {
   return Math.max(insets.bottom || 0, spacing.sm) + spacing.sm + MOBILE_BOTTOM_DOCK_CONTENT_HEIGHT;
@@ -46,14 +47,16 @@ export default function MobileBottomDock({
         style,
       ]}
     >
-      <SegmentedSlider
-        accessibilityLabel="OpenX mobile navigation"
-        onChange={handleNavigate}
-        options={MOBILE_BOTTOM_OPTIONS}
-        segmentStyle={styles.segment}
-        style={styles.slider}
-        value={activeRoute}
-      />
+      <LinearGradient colors={gradients.glassSoft} style={styles.dockShell}>
+        <SegmentedSlider
+          accessibilityLabel="OpenX mobile navigation"
+          onChange={handleNavigate}
+          options={MOBILE_BOTTOM_OPTIONS}
+          segmentStyle={styles.segment}
+          style={styles.slider}
+          value={activeRoute}
+        />
+      </LinearGradient>
       <View style={styles.indicator} />
     </View>
   );
@@ -61,11 +64,10 @@ export default function MobileBottomDock({
 
 const styles = StyleSheet.create({
   fixedDock: {
-    backgroundColor: colors.background,
     bottom: 0,
     left: 0,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     position: 'absolute',
     right: 0,
     zIndex: 24,
@@ -73,16 +75,23 @@ const styles = StyleSheet.create({
   inlineDock: {
     width: '100%',
   },
+  dockShell: {
+    ...shadows.floating,
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    padding: 2,
+  },
   slider: {
-    minHeight: 50,
+    minHeight: 52,
   },
   segment: {
-    height: 42,
+    height: 44,
     paddingHorizontal: 4,
   },
   indicator: {
     alignSelf: 'center',
-    backgroundColor: 'rgba(255,255,255,0.38)',
+    backgroundColor: 'rgba(255,255,255,0.52)',
     borderRadius: radius.round,
     height: 4,
     marginTop: spacing.sm,

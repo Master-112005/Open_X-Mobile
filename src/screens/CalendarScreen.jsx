@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
@@ -190,7 +191,7 @@ export default function CalendarScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <ScreenBackground>
       <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
         <View style={styles.headerText}>
           <Text style={styles.title}>Calendar</Text>
@@ -205,7 +206,7 @@ export default function CalendarScreen({ navigation }) {
       </View>
 
       <View style={[styles.content, { paddingBottom: bottomDockHeight + spacing.md }]}>
-        <LinearGradient colors={gradients.glass} style={styles.calendarPanel}>
+        <LinearGradient colors={gradients.glassDark} style={styles.calendarPanel}>
           <View style={styles.monthHeader}>
             <Pressable accessibilityRole="button" onPress={() => moveMonth(-1)} style={styles.monthButton}>
               <Ionicons color={colors.textSecondary} name="chevron-back" size={19} />
@@ -243,7 +244,7 @@ export default function CalendarScreen({ navigation }) {
           </View>
         </LinearGradient>
 
-        <LinearGradient colors={gradients.glassSoft} style={styles.planPanel}>
+        <LinearGradient colors={gradients.glassDark} style={styles.planPanel}>
           <View style={styles.planHeader}>
             <View>
               <Text style={styles.planTitle}>Day Plan</Text>
@@ -336,13 +337,12 @@ export default function CalendarScreen({ navigation }) {
         activeRoute="Calendar"
         navigation={navigation}
       />
-    </View>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: colors.background,
     flex: 1,
   },
   header: {
@@ -353,10 +353,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   iconButton: {
-    ...shadows.card,
+    ...shadows.floating,
     alignItems: 'center',
-    backgroundColor: colors.glass,
-    borderColor: colors.border,
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
     height: 44,
@@ -390,8 +390,8 @@ const styles = StyleSheet.create({
   },
   calendarPanel: {
     ...shadows.card,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flex: 1,
     padding: spacing.md,
@@ -442,6 +442,7 @@ const styles = StyleSheet.create({
   },
   daySelected: {
     backgroundColor: colors.white,
+    borderRadius: radius.round,
   },
   dayText: {
     color: colors.text,
@@ -462,8 +463,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   planPanel: {
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    ...shadows.card,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flex: 1,
     padding: spacing.md,
@@ -496,9 +498,9 @@ const styles = StyleSheet.create({
   },
   scheduleCard: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.md,
@@ -507,7 +509,7 @@ const styles = StyleSheet.create({
   },
   scheduleIcon: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.glassStrong,
     borderRadius: radius.round,
     height: 38,
     justifyContent: 'center',
@@ -541,15 +543,15 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.72)',
+    backgroundColor: colors.overlay,
     flex: 1,
     justifyContent: 'center',
     padding: spacing.lg,
   },
   addPanel: {
-    ...shadows.card,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    ...shadows.floating,
+    borderColor: colors.borderBright,
+    borderRadius: radius.xl,
     borderWidth: 1,
     gap: spacing.md,
     padding: spacing.md,
@@ -578,7 +580,7 @@ const styles = StyleSheet.create({
   },
   kindButton: {
     alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.contentElevated,
     borderColor: colors.border,
     borderRadius: radius.round,
     borderWidth: 1,
@@ -598,7 +600,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   input: {
-    backgroundColor: colors.glassSubtle,
+    backgroundColor: colors.content,
     borderColor: colors.border,
     borderRadius: radius.md,
     borderWidth: 1,
