@@ -17,6 +17,7 @@ import {
 
 import SegmentedSlider from '../components/SegmentedSlider';
 import AccountService from '../chat/accounts/AccountService';
+import { fromBase64, text as decodeUtf8 } from '../chat/crypto/Encoding';
 import { colors, radius, shadows, spacing } from '../styles/theme';
 
 const DEFAULT_CHAT_API = 'https://openx-chat-server.onrender.com';
@@ -93,6 +94,36 @@ const makeLocalMessage = (input = {}) => {
   };
 };
 
+const formatMessageTime = (value) => {
+  const date = new Date(value || Date.now());
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+};
+
+const normalizeMessageStatusLabel = (value) => {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'failed') return 'Failed';
+  if (status === 'queued') return 'Queued';
+  if (status === 'sending') return 'Sending';
+  return '';
+};
+
+const messageStatusIcon = (value) => {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'failed') return 'alert-circle';
+  if (status === 'queued' || status === 'sending') return 'time-outline';
+  if (status === 'delivered' || status === 'read') return 'checkmark-done';
+  return 'checkmark';
+};
+
+const messageStatusColor = (value) => {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'failed') return colors.danger;
+  if (status === 'queued' || status === 'sending') return 'rgba(3, 5, 10, 0.45)';
+  if (status === 'read') return colors.blue;
+  return 'rgba(3, 5, 10, 0.54)';
+};
+
 const pruneMessagesByRelationship = (messages = {}) => {
   if (!messages || typeof messages !== 'object' || Array.isArray(messages)) return {};
   return Object.fromEntries(
@@ -115,6 +146,37 @@ const normalizeSyncCursor = (value) => {
     String(deviceId || '').trim(),
     Math.max(0, Number(sequence || 0)),
   ]).filter(([deviceId, sequence]) => deviceId && Number.isFinite(sequence)));
+};
+
+const decodeBase64UrlText = (value) => {
+  try {
+    return decodeUtf8(fromBase64(value));
+  } catch {
+    return '';
+  }
+};
+
+const legacyPreviewFromEnvelope = (envelope = {}) => {
+  const metadata = envelope.metadata || {};
+  const direct = String(metadata.notificationPreview || metadata.messagePreview || metadata.preview || metadata.bodyPreview || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  if (direct) return direct;
+
+  const packetText = String(envelope.ciphertext || '').trim().startsWith('{')
+    ? String(envelope.ciphertext || '')
+    : decodeBase64UrlText(envelope.ciphertext);
+  if (!packetText) return '';
+  try {
+    const packet = JSON.parse(packetText);
+    if (!packet || typeof packet !== 'object' || packet.keyScope !== 'local-device-preview') return '';
+    const encodedPreview = String(packet.notificationPreview || '').trim();
+    const preview = encodedPreview ? decodeBase64UrlText(encodedPreview) : String(packet.preview || packet.messagePreview || packet.text || '');
+    return preview.replace(/\s+/g, ' ').trim().slice(0, 240);
+  } catch {
+    return '';
+  }
 };
 
 const normalizeChatSession = (value) => {
@@ -155,26 +217,46 @@ const localMessageFromEnvelope = (envelope = {}, accountId = '', received = null
   const relationshipId = message.relationshipId || metadata.relationshipId;
   if (!relationshipId) return null;
   const senderAccountId = message.senderAccountId || metadata.senderAccountId || '';
+  const plaintext = typeof received?.plaintext === 'string' ? received.plaintext : '';
+  const fallbackPreview = legacyPreviewFromEnvelope(envelope);
   return makeLocalMessage({
     id: message.messageId || envelope.messageId,
     relationshipId,
     direction: senderAccountId && senderAccountId === accountId ? 'outgoing' : 'incoming',
-    text: received?.plaintext || 'Encrypted message',
+    text: plaintext || fallbackPreview || 'Encrypted message',
     status: message.status || envelope.deliveryStatus || 'delivered',
     createdAt: message.timestamp || envelope.createdAt,
   });
 };
 
+const normalizeChatAccountId = (value) => {
+  const accountId = String(value || '').trim().toLowerCase();
+  return /^acc_[a-f0-9]{64}$/.test(accountId) ? accountId : '';
+};
+
 const relationshipSessionSeed = (context = {}) => {
   const envelopeMetadata = context.envelope?.metadata || {};
   const metadata = context.metadata || envelopeMetadata;
-  const relationshipId = String(context.relationshipId || metadata.relationshipId || '').trim();
-  const accountIds = [
+  const relationshipId = String(context.relationshipId || metadata.relationshipId || '').trim().toLowerCase();
+  const relationship = context.relationship && typeof context.relationship === 'object' ? context.relationship : {};
+  const accountIds = [...new Set([
     context.senderAccountId || metadata.senderAccountId,
     context.recipientAccountId || metadata.recipientAccountId,
-  ].map((item) => String(item || '').trim().toLowerCase()).filter(Boolean).sort();
+  ].map(normalizeChatAccountId).filter(Boolean))];
+  if (accountIds.length < 2) {
+    [
+      relationship.accountA,
+      relationship.accountB,
+      context.accountId,
+      metadata.peerAccountId,
+    ].map(normalizeChatAccountId)
+      .filter(Boolean)
+      .forEach((id) => {
+        if (!accountIds.includes(id)) accountIds.push(id);
+      });
+  }
   if (!relationshipId || accountIds.length < 2) return null;
-  return `OpenXChat:relationship-session:v1:${relationshipId}:${accountIds.join(':')}`;
+  return `OpenXChat:relationship-session:v1:${relationshipId}:${accountIds.slice(0, 2).sort().join(':')}`;
 };
 
 export async function resolveRelationshipSessionKey(context = {}) {
@@ -192,7 +274,7 @@ class MobileChatErrorBoundary extends Component {
 
   componentDidCatch(error) {
     this.props.showNotice?.({
-      title: 'Chat recovered',
+      title: 'Chat needs to recover',
       message: error?.message || 'The chat view hit an unexpected error.',
       tone: 'error',
     });
@@ -252,6 +334,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
   const [refreshing, setRefreshing] = useState(false);
   const messageManagerRef = useRef(null);
   const messagesByRelationshipRef = useRef({});
+  const relationshipsRef = useRef([]);
   const syncCursorRef = useRef({});
   const syncingRef = useRef(false);
 
@@ -290,6 +373,10 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     syncCursorRef.current = normalized;
     await AsyncStorage.setItem(CHAT_SYNC_KEY, JSON.stringify(normalized));
   }, []);
+
+  useEffect(() => {
+    relationshipsRef.current = relationships;
+  }, [relationships]);
 
   const loadLocalChat = useCallback(async () => {
     const [[, savedSession], [, savedMessages], [, savedPinned], [, savedSync]] = await AsyncStorage.multiGet([
@@ -378,11 +465,14 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
           return relationship;
         }
       }));
+      relationshipsRef.current = enrichedRelationships;
       setIncomingRequests(Array.isArray(incoming?.requests) ? incoming.requests : []);
       setOutgoingRequests(Array.isArray(outgoing?.requests) ? outgoing.requests : []);
       setRelationships(enrichedRelationships);
+      return enrichedRelationships;
     } catch (error) {
       showNotice?.({ title: 'Chat refresh failed', message: error.message, tone: 'error' });
+      return relationshipsRef.current;
     } finally {
       setRefreshing(false);
     }
@@ -434,6 +524,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     setAddUsername('');
     setAddOpen(false);
     setRelationships([]);
+    relationshipsRef.current = [];
     setIncomingRequests([]);
     setOutgoingRequests([]);
     setActiveRelationshipId('');
@@ -539,7 +630,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     return messageManagerRef.current;
   }, [apiBaseUrl]);
 
-  const syncChatMessages = useCallback(async ({ silent = true } = {}) => {
+  const syncChatMessages = useCallback(async ({ silent = true, relationshipsOverride = null } = {}) => {
     const deviceId = session.device?.deviceId || '';
     if (!accountId || !deviceId || syncingRef.current) return 0;
     syncingRef.current = true;
@@ -555,11 +646,14 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
 
       const manager = getMessageManager();
       const additions = [];
+      const relationshipList = Array.isArray(relationshipsOverride) ? relationshipsOverride : relationshipsRef.current;
       let highestSequence = afterSequence;
       for (const envelope of envelopes) {
         highestSequence = Math.max(highestSequence, Number(envelope.mailboxSequence || 0));
+        const relationshipId = String(envelope.metadata?.relationshipId || envelope.relationshipId || '').trim();
+        const relationship = relationshipList.find((item) => item.relationshipId === relationshipId) || null;
         try {
-          const received = await manager.receiveEnvelope({ accountId, deviceId, envelope });
+          const received = await manager.receiveEnvelope({ accountId, deviceId, envelope, relationship });
           const message = localMessageFromEnvelope(envelope, accountId, received);
           if (message) additions.push(message);
         } catch {
@@ -598,8 +692,8 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
   ]);
 
   const refreshChatWithSync = useCallback(async (options = {}) => {
-    await refreshChat();
-    return syncChatMessages(options);
+    const latestRelationships = await refreshChat();
+    return syncChatMessages({ ...options, relationshipsOverride: latestRelationships });
   }, [refreshChat, syncChatMessages]);
 
   useEffect(() => {
@@ -641,7 +735,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
         plaintext: text,
         metadata: {
           source: 'mobile-chat',
-          priority: 'normal',
+          priority: 'Normal',
         },
       });
       const sent = {
@@ -649,9 +743,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
         id: result.message?.messageId || optimistic.id,
         status: Number(result.delivery?.result?.deliveredCount || result.delivery?.deliveredCount || 0) > 0
           ? 'delivered'
-          : result.delivery?.queued
-            ? 'queued'
-            : 'sent',
+          : (result.delivery?.transport === 'local-queue' ? 'queued' : 'sent'),
       };
       await persistMessages({
         ...nextMessages,
@@ -682,7 +774,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
 
   if (!loaded) {
     return (
-      <View style={[styles.container, { paddingTop, paddingBottom: bottomPadding }]}>
+      <View style={[styles.container, { paddingTop: topPadding, paddingBottom: bottomPadding }]}>
         <ActivityIndicator color={colors.text} />
       </View>
     );
@@ -690,7 +782,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
 
   if (!accountId) {
     return (
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { paddingTop, paddingBottom: bottomPadding }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { paddingTop: topPadding, paddingBottom: bottomPadding }]}>
         <View style={styles.authPanel}>
           <Text style={styles.title}>OpenX Chat</Text>
           <Text style={styles.subtitle}>Use your OpenX username and password to message real users.</Text>
@@ -734,6 +826,9 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
             style={styles.input}
             value={password}
           />
+          <Text style={styles.authHint}>
+            Password needs 10+ characters with uppercase, lowercase, number, and symbol.
+          </Text>
           <Pressable
             accessibilityRole="button"
             disabled={busy}
@@ -749,7 +844,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
 
   if (activeRelationship) {
     return (
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { paddingTop, paddingBottom: bottomPadding }]}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[styles.container, { paddingTop: topPadding, paddingBottom: bottomPadding }]}>
         <View style={styles.threadHeader}>
           <Pressable
             accessibilityLabel="Back to chat list"
@@ -771,12 +866,27 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
           keyExtractor={(item) => item.id}
           maxToRenderPerBatch={8}
           removeClippedSubviews={Platform.OS === 'android'}
-          renderItem={({ item }) => (
-            <View style={[styles.messageBubble, item.direction === 'outgoing' ? styles.messageOutgoing : styles.messageIncoming]}>
-              <Text style={[styles.messageText, item.direction === 'incoming' && styles.messageTextIncoming]}>{item.text}</Text>
-              <Text style={[styles.messageStatus, item.direction === 'incoming' && styles.messageStatusIncoming]}>{item.status}</Text>
-            </View>
-          )}
+          renderItem={({ item }) => {
+            const outgoing = item.direction === 'outgoing';
+            const statusLabel = outgoing ? normalizeMessageStatusLabel(item.status) : '';
+            return (
+              <View style={[styles.messageRow, outgoing ? styles.messageRowOutgoing : styles.messageRowIncoming]}>
+                <View style={[styles.messageBubble, outgoing ? styles.messageOutgoing : styles.messageIncoming]}>
+                  <Text style={[styles.messageText, outgoing ? styles.messageTextOutgoing : styles.messageTextIncoming]}>{item.text}</Text>
+                  <View style={[styles.messageMetaRow, outgoing ? styles.messageMetaOutgoing : styles.messageMetaIncoming]}>
+                    <Text style={[styles.messageTime, outgoing ? styles.messageTimeOutgoing : styles.messageTimeIncoming]}>{formatMessageTime(item.createdAt)}</Text>
+                    {statusLabel ? (
+                      <Text style={[styles.messageStatus, outgoing ? styles.messageStatusOutgoing : styles.messageStatusIncoming]}>{statusLabel}</Text>
+                    ) : null}
+                    {outgoing ? (
+                      <Ionicons color={messageStatusColor(item.status)} name={messageStatusIcon(item.status)} size={13} />
+                    ) : null}
+                  </View>
+                  <View pointerEvents="none" style={[styles.messageTail, outgoing ? styles.messageTailOutgoing : styles.messageTailIncoming]} />
+                </View>
+              </View>
+            );
+          }}
           showsVerticalScrollIndicator={false}
           updateCellsBatchingPeriod={48}
           windowSize={7}
@@ -806,7 +916,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
   }
 
   return (
-    <View style={[styles.container, { paddingTop, paddingBottom: bottomPadding }]}>
+    <View style={[styles.container, { paddingTop: topPadding, paddingBottom: bottomPadding }]}>
       <View style={styles.chatHeader}>
         <View>
           <Text style={styles.title}>OpenX Chat</Text>
@@ -973,12 +1083,21 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: spacing.lg,
   },
+  authHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: -spacing.xs,
+  },
   primaryButton: {
     alignItems: 'center',
     backgroundColor: colors.white,
     borderRadius: radius.round,
     height: 52,
     justifyContent: 'center',
+    minWidth: 190,
+    paddingHorizontal: spacing.xl,
   },
   primaryButtonText: {
     color: colors.background,
@@ -1201,44 +1320,108 @@ const styles = StyleSheet.create({
   },
   threadList: {
     flexGrow: 1,
-    gap: spacing.sm,
+    gap: 3,
     justifyContent: 'flex-end',
     paddingBottom: spacing.md,
+    paddingHorizontal: 2,
+    paddingTop: spacing.sm,
+  },
+  messageRow: {
+    flexDirection: 'row',
+    marginVertical: 2,
+    paddingHorizontal: 2,
+    width: '100%',
+  },
+  messageRowOutgoing: {
+    justifyContent: 'flex-end',
+  },
+  messageRowIncoming: {
+    justifyContent: 'flex-start',
   },
   messageBubble: {
-    borderRadius: radius.lg,
+    borderRadius: 18,
     maxWidth: '82%',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    minWidth: 74,
+    paddingBottom: 6,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    position: 'relative',
   },
   messageOutgoing: {
-    alignSelf: 'flex-end',
     backgroundColor: colors.white,
+    borderBottomRightRadius: 5,
+    marginLeft: spacing.xl,
   },
   messageIncoming: {
-    alignSelf: 'flex-start',
-    backgroundColor: colors.contentElevated,
+    backgroundColor: 'rgba(28, 31, 42, 0.98)',
+    borderBottomLeftRadius: 5,
     borderColor: colors.border,
     borderWidth: 1,
+    marginRight: spacing.xl,
   },
   messageText: {
-    color: colors.background,
-    fontSize: 14,
+    flexShrink: 1,
+    fontSize: 15,
     fontWeight: '700',
-    lineHeight: 20,
+    letterSpacing: 0,
+    lineHeight: 21,
   },
-  messageStatus: {
-    color: 'rgba(0,0,0,0.48)',
-    fontSize: 10,
-    fontWeight: '800',
-    marginTop: 3,
-    textAlign: 'right',
+  messageTextOutgoing: {
+    color: colors.background,
   },
   messageTextIncoming: {
     color: colors.text,
   },
+  messageMetaRow: {
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    gap: 4,
+    marginLeft: spacing.lg,
+    marginTop: 3,
+  },
+  messageMetaOutgoing: {},
+  messageMetaIncoming: {},
+  messageTime: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  messageTimeOutgoing: {
+    color: 'rgba(3, 5, 10, 0.45)',
+  },
+  messageTimeIncoming: {
+    color: colors.textMuted,
+  },
+  messageStatus: {
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  messageStatusOutgoing: {
+    color: 'rgba(3, 5, 10, 0.48)',
+  },
   messageStatusIncoming: {
     color: colors.textMuted,
+  },
+  messageTail: {
+    bottom: -1,
+    height: 12,
+    position: 'absolute',
+    transform: [{ rotate: '45deg' }],
+    width: 12,
+  },
+  messageTailOutgoing: {
+    backgroundColor: colors.white,
+    right: -3,
+  },
+  messageTailIncoming: {
+    backgroundColor: 'rgba(28, 31, 42, 0.98)',
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    borderLeftColor: colors.border,
+    borderLeftWidth: 1,
+    left: -3,
   },
   chatComposer: {
     alignItems: 'flex-end',
