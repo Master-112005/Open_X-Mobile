@@ -35,6 +35,7 @@ export class RetryManager {
     await this.storage.upsertRetry(retry);
     this.eventBus?.emit?.(this.events.RETRY_STARTED, { messageId, retryCount: retry.retryCount });
     const result = await this.router.route({ ...retry.payload, retryCount: retry.retryCount });
+    if (result?.transport !== 'local-queue') await this.storage.removeRetry?.(messageId);
     this.eventBus?.emit?.(this.events.RETRY_COMPLETED, { messageId, result });
     return result;
   }

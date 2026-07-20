@@ -20,10 +20,6 @@ export class MessageRouter {
    * @returns {Promise<object>} Route result.
    */
   async route(message) {
-    if (this.connectionManager?.sendMessageEvent?.('message:send', message)) {
-      await this.storage.setStatus(message.messageId, MessageConstants.MESSAGE_STATUS.SENT);
-      return { transport: 'websocket', queued: false, messageId: message.messageId };
-    }
     try {
       const result = await this.client.send(message);
       await this.storage.setStatus(message.messageId, MessageConstants.MESSAGE_STATUS.SENT);

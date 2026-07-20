@@ -29,6 +29,7 @@ const CHAT_SYNC_KEY = '@openx-mobile/chat/sync-v1';
 const CHAT_DEVICE_KEY = '@openx-mobile/chat/device-key-v1';
 const MAX_RELATIONSHIP_MESSAGES = 300;
 const CHAT_SYNC_INTERVAL_MS = 15000;
+const CHAT_SYNC_OVERLAP = 50;
 const MESSAGE_RUNTIME_ERROR = 'Secure chat runtime is unavailable on this device build.';
 const CHAT_FILTERS = [
   { label: 'All', value: 'all' },
@@ -100,6 +101,8 @@ const makeLocalMessage = (input = {}) => {
     direction: normalizeMessageDirection(input.direction),
     text: String(input.text || '').replace(/\s+/g, ' ').trim().slice(0, 2000),
     status: String(input.status || 'sent').slice(0, 40),
+    deliveryTransport: String(input.deliveryTransport || '').slice(0, 40),
+    serverQueued: input.serverQueued === true,
     createdAt: Number.isFinite(Date.parse(input.createdAt)) ? input.createdAt : new Date().toISOString(),
   };
 };
@@ -110,28 +113,46 @@ const formatMessageTime = (value) => {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 };
 
+const messageStatusSource = (value) => (
+  value && typeof value === 'object'
+    ? value
+    : { status: value }
+);
+
 const normalizeMessageStatusLabel = (value) => {
-  const status = String(value || '').trim().toLowerCase();
+  const source = messageStatusSource(value);
+  const status = String(source.status || '').trim().toLowerCase();
   if (status === 'failed') return 'Failed';
-  if (status === 'queued') return 'Queued';
+  if (status === 'queued') return source.deliveryTransport === 'http' || source.deliveryTransport === 'websocket' ? '' : 'Queued';
   if (status === 'sending') return 'Sending';
   return '';
 };
 
 const messageStatusIcon = (value) => {
-  const status = String(value || '').trim().toLowerCase();
+  const source = messageStatusSource(value);
+  const status = String(source.status || '').trim().toLowerCase();
   if (status === 'failed') return 'alert-circle';
-  if (status === 'queued' || status === 'sending') return 'time-outline';
+  if (status === 'queued') return source.deliveryTransport === 'http' || source.deliveryTransport === 'websocket' ? 'checkmark' : 'time-outline';
+  if (status === 'sending') return 'time-outline';
   if (status === 'delivered' || status === 'read') return 'checkmark-done';
   return 'checkmark';
 };
 
 const messageStatusColor = (value) => {
-  const status = String(value || '').trim().toLowerCase();
+  const source = messageStatusSource(value);
+  const status = String(source.status || '').trim().toLowerCase();
   if (status === 'failed') return colors.danger;
-  if (status === 'queued' || status === 'sending') return 'rgba(3, 5, 10, 0.45)';
+  if (status === 'queued' && source.deliveryTransport !== 'http' && source.deliveryTransport !== 'websocket') return 'rgba(3, 5, 10, 0.45)';
+  if (status === 'sending') return 'rgba(3, 5, 10, 0.45)';
   if (status === 'read') return colors.blue;
   return 'rgba(3, 5, 10, 0.54)';
+};
+
+const localStatusFromDelivery = (delivery = {}) => {
+  const transport = String(delivery?.transport || '').trim();
+  if (transport === 'local-queue') return 'queued';
+  const deliveredCount = Math.max(0, Number(delivery?.result?.deliveredCount || delivery?.deliveredCount || 0));
+  return deliveredCount > 0 ? 'delivered' : 'sent';
 };
 
 const pruneMessagesByRelationship = (messages = {}) => {
@@ -349,6 +370,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
   const relationshipsRef = useRef([]);
   const syncCursorRef = useRef({});
   const syncingRef = useRef(false);
+  const retryingRef = useRef(false);
 
   const apiBaseUrl = session.apiBaseUrl || serverUrl || DEFAULT_CHAT_API;
   const accountId = session.account?.accountId || '';
@@ -643,13 +665,64 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
     return messageManagerRef.current;
   }, [apiBaseUrl]);
 
+  const retryQueuedChatMessages = useCallback(async () => {
+    const deviceId = session.device?.deviceId || '';
+    if (!accountId || !deviceId || retryingRef.current) return 0;
+    retryingRef.current = true;
+    try {
+      const manager = getMessageManager();
+      await manager.initialize?.();
+      const retryQueue = Array.isArray(manager.storage?.state?.retryQueue)
+        ? [...manager.storage.state.retryQueue]
+        : [];
+      if (!retryQueue.length) return 0;
+      let nextMessages = messagesByRelationshipRef.current;
+      let updatedCount = 0;
+      for (const retry of retryQueue.slice(0, 5)) {
+        const relationshipId = String(retry?.payload?.relationshipId || '').trim();
+        if (!relationshipId) continue;
+        try {
+          const delivery = await manager.retry.retryMessage(retry.messageId);
+          const current = nextMessages[relationshipId] || [];
+          if (!current.length) continue;
+          nextMessages = {
+            ...nextMessages,
+            [relationshipId]: current.map((message) => (
+              message.id === retry.messageId
+                ? {
+                  ...message,
+                  status: localStatusFromDelivery(delivery),
+                  deliveryTransport: delivery?.transport || '',
+                  serverQueued: delivery?.serverQueued === true || Number(delivery?.result?.queuedCount || 0) > 0,
+                }
+                : message
+            )),
+          };
+          updatedCount += 1;
+        } catch {
+          // Keep failed retry records queued for the next refresh.
+        }
+      }
+      if (updatedCount > 0) await persistMessages(nextMessages);
+      return updatedCount;
+    } finally {
+      retryingRef.current = false;
+    }
+  }, [
+    accountId,
+    getMessageManager,
+    persistMessages,
+    session.device?.deviceId,
+  ]);
+
   const syncChatMessages = useCallback(async ({ silent = true, relationshipsOverride = null } = {}) => {
     const deviceId = session.device?.deviceId || '';
     if (!accountId || !deviceId || syncingRef.current) return 0;
     syncingRef.current = true;
     try {
       const cursorSnapshot = syncCursorRef.current || {};
-      const afterSequence = Number(cursorSnapshot[deviceId] || 0);
+      const cursorSequence = Math.max(0, Number(cursorSnapshot[deviceId] || 0));
+      const afterSequence = Math.max(0, cursorSequence - CHAT_SYNC_OVERLAP);
       const sync = await accountService.request(
         `/sync?deviceId=${encodeURIComponent(deviceId)}&afterSequence=${encodeURIComponent(String(afterSequence))}&limit=50`,
         'GET',
@@ -741,8 +814,10 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
 
   const refreshChatWithSync = useCallback(async (options = {}) => {
     const latestRelationships = await refreshChat();
-    return syncChatMessages({ ...options, relationshipsOverride: latestRelationships });
-  }, [refreshChat, syncChatMessages]);
+    const synced = await syncChatMessages({ ...options, relationshipsOverride: latestRelationships });
+    await retryQueuedChatMessages();
+    return synced;
+  }, [refreshChat, retryQueuedChatMessages, syncChatMessages]);
 
   useEffect(() => {
     const deviceId = session.device?.deviceId || '';
@@ -868,9 +943,9 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
       const sent = {
         ...optimistic,
         id: result.message?.messageId || optimistic.id,
-        status: Number(result.delivery?.result?.deliveredCount || result.delivery?.deliveredCount || 0) > 0
-          ? 'delivered'
-          : (result.delivery?.transport === 'local-queue' ? 'queued' : 'sent'),
+        deliveryTransport: result.delivery?.transport || '',
+        serverQueued: result.delivery?.serverQueued === true || Number(result.delivery?.result?.queuedCount || 0) > 0,
+        status: localStatusFromDelivery(result.delivery),
       };
       await persistMessages({
         ...nextMessages,
@@ -995,7 +1070,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
           removeClippedSubviews={Platform.OS === 'android'}
           renderItem={({ item }) => {
             const outgoing = item.direction === 'outgoing';
-            const statusLabel = outgoing ? normalizeMessageStatusLabel(item.status) : '';
+            const statusLabel = outgoing ? normalizeMessageStatusLabel(item) : '';
             return (
               <View style={[styles.messageRow, outgoing ? styles.messageRowOutgoing : styles.messageRowIncoming]}>
                 <View style={[styles.messageBubble, outgoing ? styles.messageOutgoing : styles.messageIncoming]}>
@@ -1006,7 +1081,7 @@ function MobileChatPanelContent({ bottomPadding = 0, deviceName, showNotice, top
                       <Text style={[styles.messageStatus, outgoing ? styles.messageStatusOutgoing : styles.messageStatusIncoming]}>{statusLabel}</Text>
                     ) : null}
                     {outgoing ? (
-                      <Ionicons color={messageStatusColor(item.status)} name={messageStatusIcon(item.status)} size={13} />
+                      <Ionicons color={messageStatusColor(item)} name={messageStatusIcon(item)} size={13} />
                     ) : null}
                   </View>
                   <View pointerEvents="none" style={[styles.messageTail, outgoing ? styles.messageTailOutgoing : styles.messageTailIncoming]} />
