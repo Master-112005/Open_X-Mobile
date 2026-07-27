@@ -263,6 +263,9 @@ export function AppProvider({ children }) {
   const [cloudStatus, setCloudStatus] = useState(relayClient.getStatus());
   const [cloudPresence, setCloudPresence] = useState([]);
   const [cloudSettings, setCloudSettings] = useState(normalizeCloudSettings());
+  const [remoteTargets, setRemoteTargets] = useState([]);
+  const [remoteControlStatus, setRemoteControlStatus] = useState('');
+  const [remoteControlBusy, setRemoteControlBusy] = useState(false);
   const [desktopAddress, setDesktopAddress] = useState('');
   const [desktopPort, setDesktopPort] = useState(DEFAULT_PORT);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -288,6 +291,7 @@ export function AppProvider({ children }) {
   const pairingDataRef = useRef(initialPairingData);
   const pendingPairingRef = useRef(null);
   const pendingCloudRequestsRef = useRef(new Map());
+  const pendingRemoteRequestsRef = useRef(new Map());
   const cloudFileTransferRef = useRef(null);
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
@@ -461,6 +465,15 @@ export function AppProvider({ children }) {
     return pending;
   }, []);
 
+  const clearRemoteRequest = useCallback((requestId) => {
+    const pending = pendingRemoteRequestsRef.current.get(requestId);
+    if (!pending) return null;
+    clearTimeout(pending.timer);
+    pendingRemoteRequestsRef.current.delete(requestId);
+    setRemoteControlBusy([...pendingRemoteRequestsRef.current.values()].some(item => item.action === 'listTargets'));
+    return pending;
+  }, []);
+
   const sendCloudScheduleSync = useCallback((action = 'request', schedule = null) => {
     const cloudPairing = pairingDataRef.current.cloudPairing || {};
     if (
@@ -548,6 +561,86 @@ export function AppProvider({ children }) {
       },
     });
   }, []);
+
+  const sendCloudRemoteControl = useCallback((action = 'listTargets', control = {}) => {
+    const normalizedAction = action === 'control' ? 'control' : 'listTargets';
+    const cloudPairing = pairingDataRef.current.cloudPairing || {};
+    const cloudDesktopReady = settingsRef.current.connectionMode === 'cloud' &&
+      relayClient.isConnected() &&
+      pairingDataRef.current.paired &&
+      cloudPairing.ownerId &&
+      cloudPairing.desktopDeviceId &&
+      pairingDataRef.current.deviceId;
+
+    if (!cloudDesktopReady) {
+      setRemoteControlStatus('Connect this phone to OpenX Desktop before using Remote.');
+      return false;
+    }
+
+    const requestId = Crypto.randomUUID();
+    const packetId = `cloud_remote_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const timer = setTimeout(() => {
+      if (!pendingRemoteRequestsRef.current.has(requestId)) return;
+      pendingRemoteRequestsRef.current.delete(requestId);
+      setRemoteControlBusy([...pendingRemoteRequestsRef.current.values()].some(pending => pending.action === 'listTargets'));
+      setRemoteControlStatus('Remote request timed out. Check that OpenX Desktop is online.');
+    }, normalizedAction === 'listTargets' ? 9000 : 5000);
+
+    pendingRemoteRequestsRef.current.set(requestId, { packetId, timer, action: normalizedAction });
+    setRemoteControlBusy([...pendingRemoteRequestsRef.current.values()].some(pending => pending.action === 'listTargets'));
+    setRemoteControlStatus(normalizedAction === 'listTargets'
+      ? 'Looking for active remote apps on OpenX Desktop.'
+      : 'Sending remote command.');
+
+    const payload = {
+      type: 'remote-control',
+      action: normalizedAction,
+      deviceName: pairingDataRef.current.deviceName,
+      metadata: { client: 'openx-mobile' },
+    };
+
+    if (normalizedAction === 'control') {
+      payload.targetId = String(control.targetId || control.target || '').trim();
+      payload.command = String(control.command || control.action || 'center').trim();
+      payload.windowTitle = String(control.windowTitle || '').trim();
+      payload.tabTitle = String(control.tabTitle || '').trim();
+      payload.targetHandle = Number.isSafeInteger(Number(control.targetHandle || control.handle))
+        ? Number(control.targetHandle || control.handle)
+        : undefined;
+      payload.targetProcessId = Number.isSafeInteger(Number(control.targetProcessId || control.processId))
+        ? Number(control.targetProcessId || control.processId)
+        : undefined;
+      payload.processName = String(control.processName || '').trim();
+    }
+
+    const sent = relayClient.sendRelayPacket({
+      packetId,
+      protocolVersion: 1,
+      packetType: 'request',
+      sourceDeviceId: cloudPairing.phoneDeviceId || pairingDataRef.current.deviceId,
+      destinationDeviceId: cloudPairing.desktopDeviceId,
+      ownerId: cloudPairing.ownerId,
+      timestamp: Date.now(),
+      requestId,
+      responseId: null,
+      metadata: {
+        feature: 'remote-control',
+        deviceName: pairingDataRef.current.deviceName,
+        retryable: false,
+      },
+      checksum: null,
+      encryption: null,
+      payload,
+    });
+
+    if (!sent) {
+      clearRemoteRequest(requestId);
+      setRemoteControlStatus('OpenX Desktop is not reachable.');
+      return false;
+    }
+
+    return true;
+  }, [clearRemoteRequest]);
 
   const ensureNotificationPermission = useCallback(async () => {
     if (notificationPermissionRef.current === true) return true;
@@ -720,6 +813,54 @@ export function AppProvider({ children }) {
     };
   }, []);
 
+  const handleRemoteControlPacket = useCallback((packet = {}) => {
+    const envelope = packet?.payload && typeof packet.payload === 'object' ? packet.payload : {};
+    const requestId = envelope.requestId || packet.requestId || '';
+    const isRemotePacket = packet.metadata?.feature === 'remote-control' ||
+      envelope.responseType === 'remote-control' ||
+      pendingRemoteRequestsRef.current.has(requestId);
+    if (!isRemotePacket) return false;
+
+    if (requestId) clearRemoteRequest(requestId);
+
+    const remotePayload = envelope.payload && typeof envelope.payload === 'object'
+      ? envelope.payload
+      : envelope;
+    const data = remotePayload.data && typeof remotePayload.data === 'object'
+      ? remotePayload.data
+      : {};
+    const status = String(envelope.status || (packet.packetType === 'response' ? 'completed' : 'failed')).toLowerCase();
+    const success = remotePayload.success !== false && status === 'completed';
+
+    if (Array.isArray(data.targets)) {
+      const targets = data.targets
+        .filter((target) => target && typeof target === 'object')
+        .map((target) => ({
+          id: String(target.id || '').trim(),
+          label: String(target.label || target.id || 'Remote app').trim(),
+          kind: String(target.kind || '').trim(),
+          handle: Number.isSafeInteger(Number(target.handle)) && Number(target.handle) > 0 ? Number(target.handle) : null,
+          processId: Number.isSafeInteger(Number(target.processId)) && Number(target.processId) > 0 ? Number(target.processId) : null,
+          processName: String(target.processName || '').trim(),
+          windowTitle: String(target.windowTitle || '').trim(),
+          tabTitle: String(target.tabTitle || '').trim(),
+          source: String(target.source || '').trim(),
+          active: target.active === true,
+        }))
+        .filter((target) => target.id);
+      setRemoteTargets(targets);
+      setRemoteControlStatus(targets.length
+        ? `${targets.length} active remote app${targets.length === 1 ? '' : 's'} found.`
+        : 'No active remote apps found. Open YouTube, PowerPoint, Instagram, or Spotify on Desktop.');
+      return true;
+    }
+
+    setRemoteControlStatus(success
+      ? 'Remote command sent.'
+      : (remotePayload.message || remotePayload.error?.message || envelope.error?.message || 'Remote command failed.'));
+    return true;
+  }, [clearRemoteRequest]);
+
   const appendCloudAssistantResult = useCallback((result, timestamp = Date.now()) => {
     const responseText = result?.response || result?.message || 'Command completed.';
     setMessages((current) => [
@@ -839,6 +980,10 @@ export function AppProvider({ children }) {
       if (message.type === 'relay:ack') return;
       if (message.type === 'relay:error') {
         const requestId = message.requestId || '';
+        if (requestId && clearRemoteRequest(requestId)) {
+          setRemoteControlStatus(message.message || 'Remote command failed.');
+          return;
+        }
         if (requestId) clearCloudRequest(requestId);
         if (isCloudFileTransferRequestId(requestId)) return;
         setMessages((current) => [
@@ -850,6 +995,7 @@ export function AppProvider({ children }) {
       if (message.type !== 'relay:packet') return;
       const packet = message.packet || {};
       if (packet.payload?.type === 'cloud-file-transfer') return;
+      if (handleRemoteControlPacket(packet)) return;
       if (packet.payload?.type === 'schedule-sync') {
         if (packet.payload?.snapshot) applyScheduleSnapshot(packet.payload.snapshot);
         return;
@@ -1257,6 +1403,8 @@ export function AppProvider({ children }) {
       unsubscribeMessages();
       pendingCloudRequestsRef.current.forEach((pending) => clearTimeout(pending.timer));
       pendingCloudRequestsRef.current.clear();
+      pendingRemoteRequestsRef.current.forEach((pending) => clearTimeout(pending.timer));
+      pendingRemoteRequestsRef.current.clear();
       websocketService.disconnect();
       relayClient.disconnect('app-context-unmount').catch(() => {});
     };
@@ -1268,6 +1416,8 @@ export function AppProvider({ children }) {
     applySession,
     appendCloudAssistantResult,
     clearCloudRequest,
+    clearRemoteRequest,
+    handleRemoteControlPacket,
     normalizeCloudAssistantPacket,
     recordTransfer,
     requestScheduleSync,
@@ -1581,6 +1731,23 @@ export function AppProvider({ children }) {
     [clearCloudRequest, handleLocalScheduleCommand, paired, reconnectActiveConnection],
   );
 
+  const refreshRemoteTargets = useCallback(() => (
+    sendCloudRemoteControl('listTargets')
+  ), [sendCloudRemoteControl]);
+
+  const sendRemoteControl = useCallback((control = {}) => {
+    const targetId = String(control.targetId || control.target || '').trim();
+    if (!targetId) {
+      setRemoteControlStatus('Choose an active remote app first.');
+      return false;
+    }
+    return sendCloudRemoteControl('control', {
+      ...control,
+      targetId,
+      command: control.command || control.action || 'center',
+    });
+  }, [sendCloudRemoteControl]);
+
   const setConnectionMode = useCallback(async () => activateCloudMode(), [activateCloudMode]);
 
   const saveCloudSettings = useCallback(async (settings) => {
@@ -1890,6 +2057,9 @@ export function AppProvider({ children }) {
       cloudStatus,
       cloudPresence,
       cloudSettings,
+      remoteTargets,
+      remoteControlStatus,
+      remoteControlBusy,
       desktopAddress,
       desktopPort,
       settingsLoaded,
@@ -1917,6 +2087,8 @@ export function AppProvider({ children }) {
       upsertScheduleItem,
       removeScheduleItem,
       requestScheduleSync,
+      refreshRemoteTargets,
+      sendRemoteControl,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,
@@ -1934,6 +2106,9 @@ export function AppProvider({ children }) {
       cloudStatus,
       cloudPresence,
       cloudSettings,
+      remoteTargets,
+      remoteControlStatus,
+      remoteControlBusy,
       desktopAddress,
       desktopPort,
       settingsLoaded,
@@ -1961,6 +2136,8 @@ export function AppProvider({ children }) {
       upsertScheduleItem,
       removeScheduleItem,
       requestScheduleSync,
+      refreshRemoteTargets,
+      sendRemoteControl,
       sendFile,
       deleteReceivedFile,
       clearTransferEvent,

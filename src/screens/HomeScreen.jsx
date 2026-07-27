@@ -23,6 +23,7 @@ import ScreenBackground from '../components/ScreenBackground';
 import SegmentedSlider from '../components/SegmentedSlider';
 import { useApp } from '../context/AppContext';
 import MobileChatPanel from './MobileChatPanel';
+import MobileRemotePanel from './MobileRemotePanel';
 import {
   formatFileSize,
   isImageTransferFile,
@@ -34,6 +35,7 @@ import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 const WORKSPACE_OPTIONS = [
   { label: 'Assistant', value: 'assistant' },
   { label: 'Chat', value: 'chat' },
+  { label: 'Remote', value: 'remote' },
 ];
 
 function ConnectionDot({ status, onReconnect }) {
@@ -93,7 +95,12 @@ export default function HomeScreen({ navigation }) {
     permissionsLoaded,
     sessionLoaded,
     sessionValid,
+    remoteTargets,
+    remoteControlStatus,
+    remoteControlBusy,
     sendMessage,
+    refreshRemoteTargets,
+    sendRemoteControl,
     sendFile,
     reconnectActiveConnection,
     showNotice,
@@ -271,10 +278,23 @@ export default function HomeScreen({ navigation }) {
               windowSize={9}
             />
           </>
-        ) : (
+        ) : workspace === 'chat' ? (
           <MobileChatPanel
             bottomPadding={bottomActionHeight + spacing.sm}
             deviceName={deviceName}
+            showNotice={showNotice}
+            topPadding={topControlsHeight + spacing.md}
+          />
+        ) : (
+          <MobileRemotePanel
+            bottomPadding={bottomActionHeight + spacing.md}
+            cloudStatus={cloudStatus}
+            paired={paired}
+            refreshRemoteTargets={refreshRemoteTargets}
+            remoteControlBusy={remoteControlBusy}
+            remoteControlStatus={remoteControlStatus}
+            remoteTargets={remoteTargets}
+            sendRemoteControl={sendRemoteControl}
             showNotice={showNotice}
             topPadding={topControlsHeight + spacing.md}
           />

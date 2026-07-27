@@ -1,483 +1,774 @@
-# OpenX Mobile Implementation Report
+# OpenX Mobile Repository Report
 
-Project: OpenX Mobile
+Report date: 2026-07-21
 
-Package version: 1.0.0
+Repository: `OpenX_Mobile`
 
-Platform: Android-first mobile app
+Canonical report: `OpenX_Mobile/report.md`
 
-Runtime: Expo SDK 56, React 19, React Native 0.85
+Primary app path: `mobile`
 
-Report date: 2026-07-04
+Package: `openx-mobile`
 
-## 1. Executive Summary
+Version source: `mobile/package.json`
 
-OpenX Mobile is the companion app for OpenX Desktop. It provides a local-network mobile chat surface, QR pairing, session-backed command execution, desktop-controlled permissions, and bidirectional file transfer. The mobile app does not implement assistant NLP or automation itself. It sends plain text commands to OpenX Desktop and renders the desktop assistant response, structured choices, and file/search result cards in a mobile-friendly interface.
+Current version: `5.0.0`
 
-The current implementation includes:
+Git repository path: `OpenX_Mobile/mobile`
 
-- black glassmorphism mobile UI matching the OpenX assistant theme;
-- launch screen with Open_X / Mobile branding;
-- mobile chat with assistant-style message bubbles and structured choice cards;
-- top floating control bar for files, connection status, QR scanner, and settings;
-- QR pairing and manual connection fallback;
-- local WebSocket communication with reconnect handling;
-- optional cloud relay connection mode isolated from the local WebSocket implementation;
-- connection-mode persistence with one active provider at a time;
-- session token validation and expiry handling;
-- read-only permission display from OpenX Desktop;
-- phone-to-desktop file sending;
-- desktop-to-phone file receiving;
-- local received-file storage under the app document directory;
-- received-file management with tap-to-open, long-press action sheet, share, and delete;
-- SHA-256 verification for outgoing and incoming transfers;
-- transfer history capped at 100 records.
+Branch / commit: `chatintegration` / `9c52201`
 
-## 2. Codebase Scope
+## Scope Scanned
 
-This report covers the OpenX Mobile repository:
+This report was regenerated from the current OpenX Mobile working tree. The scan covers the Expo app, React Native screens, UI components, app context/provider, navigation, cloud relay services, QR pairing, local schedule intelligence, file transfer, OpenX Chat mobile runtime, crypto/session/message modules, tests, assets, package metadata, and Expo configuration.
 
-```text
-C:\Users\rakes\Documents\PROJECTS\open\OpenX_Mobile\mobile
-```
+Excluded or collapsed generated/dependency-heavy folders:
 
-Filtered project count:
+- `.expo/`
+- `.git/`
+- `build/`
+- `coverage/`
+- `dist/`
+- `graphify-out/`
+- `node_modules/`
 
-- Files in report tree: 28
-- Source files: 18
-- Component files: 5
-- Screen files: 4
-- Service files: 6
-- Root/config/documentation files: 9
+Current filtered scan size:
 
-The tree excludes local-only or generated noise:
+- `223` files after exclusions.
+- `200` files under `mobile/src/`.
+- `172` files under `mobile/src/chat/`.
+- `7` screen files under `mobile/src/screens/`.
+- `8` component files under `mobile/src/components/`.
+- `10` service files under `mobile/src/services/`.
+- `1` test files under `mobile/tests/`.
+- `1` asset files under `mobile/assets/`.
 
-```text
-node_modules/
-.git/
-.expo/
-```
+Top-level file distribution:
 
-## 3. High-Level Architecture
+| Area | Files |
+|---|---:|
+| `mobile` | 211 |
+| `.idea` | 8 |
+| `.codex` | 1 |
+| `AGENTS.md` | 1 |
+| `report.md` | 1 |
+| `view.xml` | 1 |
 
-```text
-User input / file picker / QR scanner
-  -> React Native screen
-  -> AppContext state and permission/session checks
-  -> websocketService
-  -> OpenX Desktop PhoneServer
-  -> desktop Assistant.processCommand(text, 'phone')
-  -> desktop automation or file-transfer action
-  -> WebSocket response
-  -> AppContext message/transfer state
-  -> mobile chat, files, or settings UI
-```
+File type distribution:
 
-The mobile assistant contract is intentionally simple:
+| Extension | Files |
+|---|---:|
+| `.js` | 187 |
+| `.jsx` | 17 |
+| `.xml` | 7 |
+| `.json` | 4 |
+| `.md` | 4 |
+| `[no-ext]` | 2 |
+| `.iml` | 1 |
+| `.png` | 1 |
 
-```text
-OpenX Mobile -> plain text command -> OpenX Desktop assistant
-```
+## Current Working Tree
 
-The mobile app must not duplicate desktop NLP, NLU, routing, automation, plugin logic, or command parsing. It displays and forwards the desktop assistant behavior.
+The top-level `OpenX_Mobile` directory is documentation-oriented. The actual Git repository is nested at `OpenX_Mobile/mobile`. This report documents the current workspace state and does not revert or discard any existing changes.
 
-## 4. Main Module Responsibilities
+Current `mobile` Git status snapshot:
 
-| Module | Path | Responsibility |
-|---|---|---|
-| App root | `App.js` | Provides safe-area context, app provider, navigation, status bar, and launch overlay |
-| Global state | `src/context/AppContext.jsx` | Owns chat messages, connection mode, pairing state, session state, permissions, transfer history, and command/file actions |
-| Navigation | `src/navigation/AppNavigator.jsx` | Defines the native-stack navigation between chat, QR pairing, settings, and transfers |
-| Chat screen | `src/screens/HomeScreen.jsx` | Main mobile chat UI, top floating controls, composer, file selection, and structured choice submission |
-| QR pairing screen | `src/screens/QRPairingScreen.jsx` | Camera-based QR scan flow and manual pairing fallback |
-| Settings screen | `src/screens/SettingsScreen.jsx` | Connection mode, cloud relay settings, desktop connection, read-only permissions, and advanced connection settings |
-| Transfers screen | `src/screens/TransfersScreen.jsx` | Received-file list, tap-to-open, long-press manage sheet, share, and delete |
-| Chat bubble | `src/components/ChatBubble.jsx` | Renders assistant/user messages, result cards, and selectable clarification choices |
-| Glass UI primitives | `src/components/GlassButton.jsx`, `src/components/GlassPanel.jsx`, `src/components/ScreenBackground.jsx`, `src/components/FadeInView.jsx` | Reusable theme-matching visual primitives and animation helpers |
-| WebSocket service | `src/services/websocket.js` | Local WebSocket lifecycle, reconnects, command sending, chunked file transfer, transfer acknowledgements, and message fanout |
-| Relay client | `src/services/relayClient.js` | Optional cloud relay WebSocket lifecycle, device registration, reconnects, status snapshots, timeout handling, cloud QR pairing, opaque relay packet hooks, cloud assistant command transport, cloud file transfer packet transport, presence, notifications, and future auth placeholders |
-| File transfer service | `src/services/fileTransfer.js` | File picking, size checks, base64 conversion, SHA-256 hashing, incoming file storage, deletion, and transfer history |
-| Permissions service | `src/services/permissions.js` | Normalizes and persists desktop-controlled phone permissions |
-| QR pairing parser | `src/services/qrPairing.js` | Validates local LAN QR payloads and cloud relay QR payloads with expiry checks |
-| Session service | `src/services/session.js` | Normalizes, validates, persists, and clears session tokens |
-| Theme | `src/styles/theme.js` | Central colors, spacing, radius, gradients, and shadow tokens |
+- Mobile Git working tree appears clean for tracked files.
 
-## 5. Critical Functions And Methods
+## Product Purpose
 
-### App And UI
+OpenX Mobile is the mobile companion for OpenX Desktop. It provides assistant command entry, cloud pairing, schedule sync, local reminder/alarm/timer fallback, file transfer, QR pairing, profile/settings UI, and OpenX Chat mobile messaging.
 
-| Function or method | File | Purpose |
-|---|---|---|
-| `App()` | `App.js` | Boots the app provider, navigation, dark status bar, and launch animation. |
-| `AppNavigator()` | `src/navigation/AppNavigator.jsx` | Defines app screens and dark navigation theme. |
-| `HomeScreen()` | `src/screens/HomeScreen.jsx` | Renders the chat surface, floating top control bar, connection indicator, composer, and file-send entry point. |
-| `FloatingButton()` | `src/screens/HomeScreen.jsx` | Icon-only floating controls for files, QR, and settings. |
-| `ConnectionDot()` | `src/screens/HomeScreen.jsx` | Shows connected/disconnected status without interrupting chat. |
-| `handleChoice(value)` | `src/screens/HomeScreen.jsx` | Sends structured assistant choice numbers back to desktop. |
-| `handlePickFile()` | `src/screens/HomeScreen.jsx` | Opens the document picker and stages a selected file for sending. |
-| `handleSend()` | `src/screens/HomeScreen.jsx` | Sends either selected file transfer or text command based on composer state. |
-| `ChatBubble()` | `src/components/ChatBubble.jsx` | Displays user/assistant messages with animation and structured content. |
-| `normalizeResultEntries(message)` | `src/components/ChatBubble.jsx` | Converts desktop search/file result payloads into mobile result cards. |
-| `ChoiceCards()` | `src/components/ChatBubble.jsx` | Renders desktop clarification choices as tappable cards. |
-| `TransfersScreen()` | `src/screens/TransfersScreen.jsx` | Lists received files and manages open/share/delete behavior. |
-| `FileRow()` | `src/screens/TransfersScreen.jsx` | Provides tap-to-open and long-press management for each transfer. |
-| `openFile(item)` | `src/screens/TransfersScreen.jsx` | Opens received files through Android content URI or falls back to share. |
-| `manageFile(item)` | `src/screens/TransfersScreen.jsx` | Opens the in-app black/glass file action sheet. |
-| `deleteManagedFile()` | `src/screens/TransfersScreen.jsx` | Deletes a received file and removes its transfer record. |
+The current mobile design is cloud-first. The app connects through the OpenX cloud relay and OpenX Chat Server instead of relying on insecure local LAN fallback. When OpenX Desktop is connected, commands can be forwarded to the desktop assistant. When desktop is unavailable, mobile keeps local schedule intelligence for reminders, alarms, and timers.
 
-### State, Pairing, And Command Flow
+Main product responsibilities:
 
-| Function or method | File | Purpose |
-|---|---|---|
-| `AppProvider()` | `src/context/AppContext.jsx` | Central provider for all app state and OpenX Desktop communication. |
-| `createMessage(role, text, timestamp, metadata)` | `src/context/AppContext.jsx` | Normalizes chat messages and attaches assistant metadata such as choices. |
-| `normalizeConnectionSettings(settings)` | `src/context/AppContext.jsx` | Converts saved connection mode, local server IP/port, and cloud settings into a stable settings object. |
-| `persistConnectionSettings(updates)` | `src/context/AppContext.jsx` | Persists the selected network provider and its settings to AsyncStorage. |
-| `activateLocalMode(updates)` | `src/context/AppContext.jsx` | Disconnects cloud relay and restores the local desktop WebSocket path. |
-| `activateCloudMode(updates)` | `src/context/AppContext.jsx` | Disconnects local desktop WebSocket and selects the cloud relay provider. |
-| `applyPairingData(data)` | `src/context/AppContext.jsx` | Updates current device identity and pairing state. |
-| `applySession(session)` | `src/context/AppContext.jsx` | Updates active session validity and expiry. |
-| `applyPermissionState(permissionState)` | `src/context/AppContext.jsx` | Stores latest desktop permission state. |
-| `recordTransfer(record)` | `src/context/AppContext.jsx` | Adds transfer history with a 100-record cap and persists it. |
-| `sendMessage(text)` | `src/context/AppContext.jsx` | Sends a command to desktop if paired, permitted, and session-valid. |
-| `saveSettings(address, port)` | `src/context/AppContext.jsx` | Saves manual desktop connection settings and reconnects. |
-| `testConnection(address, port)` | `src/context/AppContext.jsx` | Tests WebSocket connectivity to OpenX Desktop. |
-| `setConnectionMode(mode)` | `src/context/AppContext.jsx` | Switches between Local and Cloud while enforcing one active connection provider. |
-| `saveCloudSettings(settings)` | `src/context/AppContext.jsx` | Saves relay URL, reconnect, heartbeat, timeout, and auto-connect settings. |
-| `connectCloud(settings)` | `src/context/AppContext.jsx` | Connects the mobile app to the relay server only. |
-| `disconnectCloud()` | `src/context/AppContext.jsx` | Manually disconnects from relay and stops cloud reconnect behavior. |
-| `pairCloudDevice(payload)` | `src/context/AppContext.jsx` | Switches to Cloud mode, sends a relay pair request, waits for desktop approval, and persists cloud pairing state. |
-| `cloudPresence` / `cloudNotifications` context values | `src/context/AppContext.jsx` | Expose relay presence and notification updates to mobile screens without affecting Local mode. |
-| `pairDevice(name, token)` | `src/context/AppContext.jsx` | Sends a pairing request and waits for desktop confirmation. |
-| `sendFile(file)` | `src/context/AppContext.jsx` | Validates permissions/session, prepares a file, and sends it to desktop. |
-| `deleteReceivedFile(recordId)` | `src/context/AppContext.jsx` | Deletes a stored received file and updates history. |
-| `useApp()` | `src/context/AppContext.jsx` | Safe access hook for app state. |
+- Pair with OpenX Desktop through cloud QR and desktop approval.
+- Send assistant commands to desktop through relay packets.
+- Keep local schedule fallback for reminders, alarms, and timers.
+- Sync schedules and profile data with desktop when connected.
+- Send and receive files through the cloud transfer path.
+- Register/login with OpenX Chat Server.
+- Add contacts, accept/reject requests, and send/receive OpenX Chat messages.
+- Persist settings, pairing state, profile, schedules, transfer history, and chat state locally.
+- Present an iOS-style dark glass UI with bottom dock navigation and segmented controls.
 
-### WebSocket Communication
+## Technology And Language Inventory
 
-| Function or method | File | Purpose |
-|---|---|---|
-| `OpenXWebSocketService.connect(host, port)` | `src/services/websocket.js` | Starts a local WebSocket connection to OpenX Desktop. |
-| `OpenXWebSocketService.open(host, port, isReconnect)` | `src/services/websocket.js` | Creates the socket, binds lifecycle handlers, applies timeouts, and schedules retry. |
-| `OpenXWebSocketService.disconnect()` | `src/services/websocket.js` | Closes socket, timers, and remembered transfer errors. |
-| `OpenXWebSocketService.reconnect()` | `src/services/websocket.js` | Reopens the last known desktop connection. |
-| `OpenXWebSocketService.sendCommand(message, metadata)` | `src/services/websocket.js` | Sends a validated phone command payload to desktop. |
-| `OpenXWebSocketService.sendPairRequest(deviceId, deviceName, token)` | `src/services/websocket.js` | Sends a pairing request to desktop. |
-| `OpenXWebSocketService.sendFileTransfer(payload)` | `src/services/websocket.js` | Sends file-transfer start, chunks, and completion with acknowledgement waits. |
-| `OpenXWebSocketService.waitForTransferMessage(transferId, expectedTypes)` | `src/services/websocket.js` | Waits for desktop transfer acknowledgements or errors. |
-| `OpenXWebSocketService.waitForSocketDrain()` | `src/services/websocket.js` | Prevents large transfer buffering from overwhelming the WebSocket. |
-| `OpenXWebSocketService.sendTransferReceipt(payload)` | `src/services/websocket.js` | Acknowledges desktop-to-phone file delivery. |
-| `OpenXWebSocketService.handleMessage(rawMessage)` | `src/services/websocket.js` | Parses desktop messages and dispatches known response/event types. |
-| `OpenXWebSocketService.scheduleReconnect()` | `src/services/websocket.js` | Retries after connection loss unless manually disconnected. |
-| `OpenXWebSocketService.subscribeToStatus(listener)` | `src/services/websocket.js` | Subscribes UI state to socket status changes. |
-| `OpenXWebSocketService.subscribeToMessages(listener)` | `src/services/websocket.js` | Subscribes app state to desktop messages. |
-
-### Cloud Relay Client
-
-| Function or method | File | Purpose |
-|---|---|---|
-| `normalizeRelayUrl(value)` | `src/services/relayClient.js` | Normalizes `http`, `https`, `ws`, or `wss` relay URLs without requiring a URL polyfill. |
-| `normalizeCloudSettings(settings)` | `src/services/relayClient.js` | Sanitizes relay URL, auto-connect, reconnect, heartbeat, and timeout settings. |
-| `RelayClient.connect(settings)` | `src/services/relayClient.js` | Opens the optional cloud relay WebSocket connection. |
-| `RelayClient.disconnect(reason)` | `src/services/relayClient.js` | Closes the relay socket, timers, and reconnect state after manual disconnect or mode switch. |
-| `RelayClient.reconnect()` | `src/services/relayClient.js` | Reopens the relay connection with bounded backoff after unexpected disconnects. |
-| `RelayClient.getStatus(extra)` | `src/services/relayClient.js` | Returns UI-safe relay state, relay URL, timestamps, duration, reconnect attempts, quality placeholder, and friendly text. |
-| `RelayClient.send(payload)` | `src/services/relayClient.js` | Sends relay protocol payloads only when connected. |
-| `RelayClient.sendRelayPacket(packet)` | `src/services/relayClient.js` | Sends a Phase 6 opaque relay packet without implementing mobile-side assistant execution. |
-| `RelayClient.setDeviceIdentity(identity)` | `src/services/relayClient.js` | Loads the existing mobile device ID/name into the relay client for stable cloud registration. |
-| `RelayClient.registerDevice()` | `src/services/relayClient.js` | Registers the phone as a relay device without enabling cloud command or file routing. |
-| `RelayClient.pairWithToken(payload)` | `src/services/relayClient.js` | Sends a cloud pair request to the relay and resolves only after desktop approval. |
-| `RelayClient.authenticate()` | `src/services/relayClient.js` | Placeholder for future relay authentication phases. |
-| `RelayClient.subscribeToStatus(listener)` | `src/services/relayClient.js` | Publishes connection state to Settings and Home UI. |
-| `RelayClient.subscribeToRelayPackets(listener)` | `src/services/relayClient.js` | Publishes `relay:packet`, `relay:ack`, and `relay:error` transport messages for cloud command responses and future cloud features. |
-| `RelayClient.updatePresence(state, metadata)` | `src/services/relayClient.js` | Publishes phone cloud presence such as online, busy, idle, syncing, or sleeping. |
-| `RelayClient.subscribeToPresence(listener)` | `src/services/relayClient.js` | Publishes paired-device presence lists to the app context. |
-| `RelayClient.createNotification(payload)` | `src/services/relayClient.js` | Creates cloud notification records through the relay. |
-| `RelayClient.subscribeToNotifications(listener)` | `src/services/relayClient.js` | Publishes cloud notification lists to the app context. |
-| `RelayClient.markNotificationRead(notificationId)` | `src/services/relayClient.js` | Marks a cloud notification read. |
-| `RelayClient.dismissNotification(notificationId)` | `src/services/relayClient.js` | Dismisses a cloud notification. |
-| `sendMessage(text)` cloud branch | `src/context/AppContext.jsx` | Builds Phase 7 `assistant-command` packets, tracks request timeouts, and renders structured desktop assistant responses in mobile chat. |
-| `CloudFileTransferManager.sendFile(file)` | `src/services/cloudFileTransfer.js` | Sends cloud file metadata, waits for receiver approval, and uploads base64 chunks through relay packets. |
-| `CloudFileTransferManager.acceptTransfer(transferId)` | `src/services/cloudFileTransfer.js` | Accepts incoming cloud file metadata before chunk data is saved. |
-| `CloudFileTransferManager.handleChunk(packet, payload)` | `src/services/cloudFileTransfer.js` | Verifies chunk sequence/checksum and sends chunk acknowledgements. |
-| `CloudFileTransferManager.handleComplete(payload)` | `src/services/cloudFileTransfer.js` | Stores the verified incoming file with the existing mobile received-file storage flow. |
-| `sendFile(file)` cloud branch | `src/context/AppContext.jsx` | Uses the cloud file transfer manager when the app is in Cloud mode and the relay is connected. |
-
-### File Transfer And Storage
-
-| Function or method | File | Purpose |
-|---|---|---|
-| `calculateFileHash(uri)` | `src/services/fileTransfer.js` | Computes SHA-256 for selected or stored files. |
-| `pickTransferFile()` | `src/services/fileTransfer.js` | Opens system document picker and returns a validated file descriptor. |
-| `prepareOutgoingFile(file)` | `src/services/fileTransfer.js` | Reads selected file as base64, checks size, and hashes data before sending. |
-| `storeIncomingFile(payload)` | `src/services/fileTransfer.js` | Validates desktop file payload, writes it into app storage, verifies hash, and returns a transfer record. |
-| `removeReceivedFile(record)` | `src/services/fileTransfer.js` | Deletes only files inside OpenX received storage. |
-| `createTransferRecord(data)` | `src/services/fileTransfer.js` | Normalizes transfer history entries. |
-| `loadTransferHistory()` | `src/services/fileTransfer.js` | Loads persisted transfer metadata. |
-| `persistTransferHistory(history)` | `src/services/fileTransfer.js` | Saves transfer history with a 100-record cap. |
-| `formatFileSize(size)` | `src/services/fileTransfer.js` | Formats transfer sizes for UI display. |
-
-### Security, Permissions, And QR
-
-| Function or method | File | Purpose |
-|---|---|---|
-| `parsePairingQrPayload(rawPayload, now)` | `src/services/qrPairing.js` | Parses either local LAN QR JSON or cloud relay QR JSON and rejects malformed or expired codes. |
-| `normalizePermissions(value, fallback)` | `src/services/permissions.js` | Normalizes desktop-controlled permissions. |
-| `loadPermissionState()` | `src/services/permissions.js` | Loads persisted permission state. |
-| `persistPermissionState(permissionState)` | `src/services/permissions.js` | Saves latest permission state from desktop. |
-| `normalizeSession(value)` | `src/services/session.js` | Normalizes session token payloads from desktop. |
-| `isSessionValid(session, now)` | `src/services/session.js` | Validates session token and expiry before commands/transfers. |
-| `loadSession()` | `src/services/session.js` | Loads persisted session data. |
-| `persistSession(session)` | `src/services/session.js` | Saves current desktop-issued session. |
-| `clearPersistedSession()` | `src/services/session.js` | Removes expired or invalid session data. |
-
-## 6. Phone Command And Assistant Integration
-
-OpenX Mobile forwards commands through:
-
-```text
-HomeScreen
-  -> sendMessage()
-  -> websocketService.sendCommand()
-  -> OpenX Desktop PhoneServer
-  -> PhoneCommandRouter
-  -> Assistant.processCommand(command, 'phone', phoneContext)
-```
-
-Important behavior:
-
-- Mobile sends plain text only; desktop owns NLP, NLU, parser, router, NLE, automation, and response generation.
-- Desktop responses are rendered as assistant messages.
-- Structured desktop choices are stored in `message.choices` and rendered as tappable choice cards.
-- When the desktop asks the user to choose a file/folder, tapping a card sends the option number back through the same command path.
-- Phone-origin commands do not require the user to say "phone" when requesting files from desktop. The desktop uses the phone source and `phoneContext`.
-
-## 7. File Transfer Architecture
-
-### Phone To Desktop
-
-```text
-User taps +
-  -> DocumentPicker
-  -> prepareOutgoingFile()
-  -> SHA-256 hash
-  -> websocketService.sendFileTransfer()
-  -> file-transfer-start
-  -> file-transfer-chunk*
-  -> file-transfer-complete
-  -> desktop verification and storage
-  -> file-transfer-success
-  -> transfer history update
-```
-
-Transfer controls:
-
-- maximum file size: 100 MB;
-- chunk size: 256 KB raw-equivalent base64 slices;
-- socket buffered amount threshold: 2 MB;
-- transfer acknowledgement timeout: 30 seconds;
-- remembered transfer errors capped at 50 entries;
-- outgoing payload includes request ID, device ID, session token, timestamp, file size, and hash.
-
-### Desktop To Phone
-
-```text
-Desktop sends incoming-file / file-transfer payload
-  -> AppContext permission and session checks
-  -> storeIncomingFile()
-  -> received-files app document directory
-  -> SHA-256 verification
-  -> transfer receipt to desktop
-  -> transfer history update
-```
-
-Received files are stored inside the app sandbox:
-
-```text
-FileSystem.documentDirectory/received-files/
-```
-
-The transfers UI lets the user:
-
-- tap once to open the file;
-- long press to open the in-app action sheet;
-- share through the native share sheet;
-- delete the stored file and its transfer record.
-
-## 8. Local Storage
-
-OpenX Mobile persists small metadata through AsyncStorage:
-
-| Key | Purpose |
+| Area | Technology |
 |---|---|
-| `@openx/settings` | Desktop address and port |
-| `@openx/pairing` | Device ID, device name, paired flag, paired timestamp |
-| `@openx/permissions` | Latest desktop-controlled permission state |
-| `@openx/session` | Session token and expiry metadata |
-| `@openx/transfer-history` | Last 100 transfer records |
+| App framework | Expo `~56.0.16` |
+| Mobile UI runtime | React Native `0.85.3` |
+| React | `19.2.3` |
+| Main language | JavaScript and JSX |
+| Navigation | `@react-navigation/native`, `@react-navigation/native-stack` |
+| Local storage | `@react-native-async-storage/async-storage` |
+| Secure storage | `expo-secure-store` for secrets such as cloud E2EE master key |
+| Cryptography primitives | `expo-crypto`, WebCrypto where available, `node-forge` fallback for AES/HKDF paths |
+| Camera / QR | `expo-camera` |
+| Notifications | `expo-notifications` for local schedule notifications |
+| Files | `expo-document-picker`, `expo-file-system`, `expo-sharing` |
+| Icons | `@expo/vector-icons` / Ionicons |
+| Styling | React Native StyleSheet, shared theme in `src/styles/theme.js`, glass components |
+| Tests | Node-based tests under `mobile/tests` |
 
-Binary received files are stored in the app document directory under `received-files/`.
+## Models And Intelligence Assets
 
-Storage rules:
+OpenX Mobile does not currently include local ONNX, TFLite, Core ML, or other ML model files. Its local intelligence is implemented in JavaScript.
 
-- file names are sanitized before storage;
-- duplicate incoming names receive a short timestamp/random suffix;
-- delete is constrained to OpenX received storage;
-- failed transfers write metadata only;
-- transfer history is capped to avoid unbounded growth.
+Current intelligence components:
 
-## 9. Security And Safety Model
+- `mobile/src/services/mobileScheduleIntelligence.js`: deterministic local parser for reminders, alarms, timers, durations, dates, weekdays, recurrence, spoken clock times, natural periods, and noisy schedule wording.
+- `mobile/src/context/AppContext.jsx`: command routing between mobile-local schedule handling and cloud/desktop forwarding.
+- `mobile/src/components/ChatBubble.jsx`: structured assistant result rendering, visual result cards, choices, and message bubble display.
+- OpenX Desktop remains the full assistant/NLP authority when mobile is connected to desktop.
 
-OpenX Mobile relies on these safety layers:
+No mobile-local speech, image, face, or large language model assets were found in the filtered scan.
 
-- pairing token required before trust is established;
-- session token required for commands and transfers;
-- session expiry blocks commands and file transfer;
-- desktop permission state controls remote commands and transfer directions;
-- incoming file payloads must include valid base64, declared size, and SHA-256 hash;
-- outgoing files are size-checked and hashed before transfer;
-- received-file delete is restricted to app-owned received storage;
-- QR payload parser rejects invalid/expired pairing data;
-- reconnect handling avoids silently sending commands while disconnected;
-- no cloud assistant or cloud speech service is used by the mobile app.
+## Expo Configuration
 
-## 10. UI And UX
+Configuration source: `mobile/app.config.js`.
 
-The mobile UI is intentionally minimal and assistant-focused:
+| Setting | Value |
+|---|---|
+| App name | `OpenX Mobile` |
+| Slug | `openxmobile` |
+| Version source | `mobile/package.json` |
+| Orientation | `portrait` |
+| Theme | dark UI style |
+| Android package | `com.openx.mobile` |
+| iOS bundle ID | `com.openx.mobile` |
+| Android cleartext traffic | disabled through `expo-build-properties` |
+| Camera | QR scanner enabled; microphone disabled |
+| Android permissions | `CAMERA`, `POST_NOTIFICATIONS` |
+| EAS project ID | `36f7718d-5153-4915-889f-09613b0a433b` |
 
-- black theme;
-- glass panels and buttons;
-- icon-first controls;
-- floating top control bar so controls do not overlap chat;
-- connection status indicator;
-- full-screen chat surface;
-- bottom composer with file add and send controls;
-- structured file/folder choices rendered inside assistant bubbles;
-- received-files screen with native open/share behavior;
-- in-app file action sheet matching the OpenX theme.
+Configured Expo plugins:
 
-Main UI files:
+- `expo-build-properties`
+- `expo-camera`
+- `expo-font`
+- `expo-notifications`
+- `expo-secure-store`
+- `expo-sharing`
 
-- `src/screens/HomeScreen.jsx`
-- `src/screens/TransfersScreen.jsx`
-- `src/screens/SettingsScreen.jsx`
-- `src/screens/QRPairingScreen.jsx`
-- `src/components/ChatBubble.jsx`
-- `src/styles/theme.js`
+## Main Runtime Entrypoints And Important Methods
 
-## 11. Testing And Validation
+| File | Important classes/functions | Responsibility |
+|---|---|---|
+| `mobile/App.js` | `AppErrorBoundary`, `AppRuntime`, `App` | App bootstrap, recovery boundary, provider wiring, runtime restart after UI crash. |
+| `mobile/src/context/AppContext.jsx` | `AppProvider`, `ensurePairingIdentity`, `activateCloudMode`, `sendCloudScheduleSync`, `flushDirtyScheduleSync`, `sendCloudProfileSync`, `ensureNotificationPermission`, `scheduleLocalScheduleNotification`, `requestScheduleSync`, `sendCommand`, `sendFile`, `connect`, `disconnect`, profile/settings persistence helpers | Central mobile app state, pairing, settings, session, schedules, relay events, command handling, local notifications, file transfer, and history. |
+| `mobile/src/navigation/AppNavigator.jsx` | `AppNavigator` | Native stack navigation and theme integration. |
+| `mobile/src/screens/HomeScreen.jsx` | home/assistant UI handlers | Assistant/chat toggle, command composer, bottom dock entry point. |
+| `mobile/src/screens/MobileChatPanel.jsx` | `clearMobileChatStorage`, `normalizeServerUrl`, `chatWebSocketUrl`, `makeLocalMessage`, `loadChatState`, `persistChatMessages`, `openConversation`, `sendMessage`, `syncMailbox`, chat recovery boundary | OpenX Chat mobile UI and local chat state. |
+| `mobile/src/screens/CalendarScreen.jsx` | calendar/day-plan UI and schedule actions | Mobile calendar, day plan, reminder/alarm/timer popup and sync entry points. |
+| `mobile/src/screens/QRPairingScreen.jsx` | camera permission and QR scan handlers | Cloud QR pairing scanner. |
+| `mobile/src/screens/TransfersScreen.jsx` | transfer rendering and file open helpers | Transfer history and file actions. |
+| `mobile/src/screens/SettingsScreen.jsx` | settings sections, profile/system controls | Mobile settings UI. |
+| `mobile/src/screens/ProfileScreen.jsx` | profile form handlers | User profile editing and sync. |
+| `mobile/src/components/SegmentedSlider.jsx` | segmented slider control | iOS-style segmented control used across top bars and settings. |
+| `mobile/src/components/MobileBottomDock.jsx` | bottom dock navigation | Fixed bottom icon navigation. |
+| `mobile/src/components/ChatBubble.jsx` | `normalizeResultEntries`, `ResultCards`, `ChoiceCards`, `ChatBubble` | Assistant/user message bubbles and structured result cards. |
+| `mobile/src/services/mobileScheduleIntelligence.js` | `parseMobileScheduleCommand`, `nextScheduleDueForRecurrence`, `formatScheduleDue` | Local schedule NLP parser. |
+| `mobile/src/services/relayClient.js` | relay connect/send/subscribe helpers | OpenX cloud relay client. |
+| `mobile/src/services/cloudFileTransfer.js` | cloud transfer packet and checksum helpers | Relay file transfer support. |
+| `mobile/src/services/fileTransfer.js` | document picker, read/write, history | Local file selection, received-file storage, transfer history. |
+| `mobile/src/services/e2ee.js` | `generateSecret`, packet encryption helpers | Cloud E2EE packet helper. |
+| `mobile/src/services/qrPairing.js` | QR payload parsing/validation | Cloud QR pairing parsing. |
+| `mobile/src/services/scheduleStore.js` | schedule persistence helpers | Local schedule storage. |
+| `mobile/src/chat/ChatManager.js` | `ChatManager` | Mobile Chat composition root. |
+| `mobile/src/chat/accounts/AccountService.js` | account/register/login requests | OpenX Chat account API client. |
+| `mobile/src/chat/messages/MessageManager.js` | `initialize`, `sendText`, `send`, `receiveEnvelope`, `syncMailbox` | Encrypted message lifecycle. |
+| `mobile/src/chat/messages/MessagePipeline.js` | `createEncryptedMessage`, `receiveEncryptedEnvelope`, `resolveSessionKey` | Encrypt/decrypt message payloads. |
+| `mobile/src/chat/messages/MessageRouter.js` | `route` | WebSocket primary delivery with HTTP/local queue fallback. |
+| `mobile/src/chat/messages/MessageStorage.js` | `upsertMessage`, `setStatus`, `markRead`, `prune`, `persist` | AsyncStorage-backed bounded message storage. |
+| `mobile/src/chat/crypto/CryptoManager.js` | `CryptoManager` | Mobile crypto facade. |
+| `mobile/src/chat/crypto/AESManager.js` | AES-GCM encryption/decryption | Message encryption support with WebCrypto/node-forge paths. |
+| `mobile/src/chat/crypto/HKDFManager.js` | HKDF-SHA256 derivation | Session/message key derivation. |
+| `mobile/src/chat/crypto/RandomManager.js` | secure random bytes | Uses `expo-crypto` when available. |
+| `mobile/src/chat/crypto/SecureStorageManager.js` | secure storage abstraction | Stores encrypted local secrets. |
+| `mobile/src/chat/conversations/ConversationManager.js` | conversation lifecycle | Local conversations, search, pin/mute/archive, pagination. |
+| `mobile/src/chat/synchronization/SynchronizationManager.js` | `synchronize`, `sync` | Reliable mailbox/message synchronization. |
+| `mobile/src/chat/mailbox/MailboxManager.js` | mailbox sync and ACK | Offline message recovery. |
+| `mobile/src/chat/connection/ConnectionEngine.js` | connection lifecycle | Chat server connection, heartbeat, reconnect. |
+| `mobile/src/chat/infrastructure/PerformanceManager.js` | performance coordination | Battery, storage, memory, connection and sync optimization. |
+| `mobile/src/chat/quality/QualityManager.js` | quality/release validation | Production readiness hooks. |
 
-Available scripts:
+## Mobile App State And Storage
 
-```powershell
-npm start
-npm run android
-npm run ios
-npm run web
-npm run doctor
-```
+OpenX Mobile uses AsyncStorage for normal app state and SecureStore for selected secrets. Storage is intentionally local to the mobile device.
 
-Current validation performed:
+Important storage keys and areas found in the scan:
 
-```powershell
-npm run doctor
-```
+| Key/area | Purpose |
+|---|---|
+| `@openx/settings` | Relay/server/settings state. |
+| `@openx/pairing` | Mobile device identity and cloud pairing metadata. |
+| `@openx/profile` | User profile fields for sync with desktop. |
+| `@openx/chat-history-v1` | Assistant chat history, capped to 300 messages. |
+| `@openx/schedules/dirty` | Schedule IDs waiting for sync. |
+| `openx.cloud.e2eeMasterKey` in SecureStore | Cloud packet E2EE master key. |
+| `@openx-mobile/chat/session-v1` | OpenX Chat account/session state. |
+| `@openx-mobile/chat/messages-v1` | Mobile OpenX Chat messages, capped per relationship. |
+| `@openx-mobile/chat/pinned-v1` | Pinned chat metadata. |
+| `@openx-mobile/chat/sync-v1` | Chat sync cursor/state. |
+| `@openx-mobile/chat/device-key-v1` | Local mobile chat device key/id. |
+| Transfer history store | File transfer history and received-file metadata. |
+| Schedule store | Local reminders, alarms, timers, recurrence. |
 
-Result:
+Storage safety behavior:
+
+- Assistant chat history is bounded by `MAX_MOBILE_CHAT_HISTORY = 300`.
+- OpenX Chat relationship histories are bounded by `MAX_RELATIONSHIP_MESSAGES = 300`.
+- Large assistant message data is sanitized before persistence.
+- SecureStore is used for the cloud E2EE master key.
+- File transfer history is bounded.
+- Local chat recovery can clear mobile chat state without clearing server account data.
+
+## Assistant Command And Desktop Forwarding Workflow
+
+When the phone is paired and cloud relay is connected, mobile commands are intended to be processed by OpenX Desktop. When desktop is not connected, mobile can execute a local fallback for schedules.
 
 ```text
-21/21 Expo project checks passed.
+User command in Home screen
+  -> AppContext sendCommand
+  -> if cloud relay paired and connected
+       -> create assistant-command relay packet
+       -> OpenX Desktop Assistant.processCommand
+       -> relay response packet
+       -> mobile app appends assistant response
+  -> else if schedule command can be parsed locally
+       -> parseMobileScheduleCommand
+       -> save local schedule
+       -> schedule local notification
+       -> mark dirty for later desktop sync
+  -> else
+       -> show connection/waiting state
 ```
 
-The project currently does not define a dedicated lint or unit-test script. Runtime validation should include:
+This design keeps the full assistant intelligence on desktop when available while preserving basic mobile usefulness for alarms, reminders, and timers offline.
 
-- QR pairing with a live OpenX Desktop instance;
-- command send and structured choice selection;
-- phone-origin desktop file search;
-- desktop-to-phone file receive;
-- tap-to-open received file;
-- long-press share/delete flow;
-- phone-to-desktop file send;
-- reconnect after desktop restart;
-- session expiry and re-pairing behavior.
+## Mobile Schedule Intelligence Detail
 
-## 12. Packaging
+`mobile/src/services/mobileScheduleIntelligence.js` implements deterministic schedule parsing in JavaScript. It is not a model file. It provides the mobile fallback intelligence for alarms, reminders, and timers.
 
-The app is Expo-based and Android-first.
+Supported schedule understanding includes:
 
-Development:
+- Numeric and spoken numbers.
+- Timers such as `in 10 minutes`, `after two hours`, `for 30 mins`.
+- Clock times such as `9:30 pm`, `930 pm`, `nine thirty pm`, `half past nine`.
+- Date words such as today, tomorrow, tonight, morning, evening, night.
+- Weekdays and next/this weekday.
+- Month names and numeric dates.
+- Recurrence such as daily, weekly, weekdays, weekends, every Monday.
+- Noisy spellings such as `tommorow`, `alram`, `remider`.
+- Cleanup of reminder text so `i have a meeting at 6pm tomorrow remind me` becomes a reminder for `meeting`.
 
-```powershell
-npm start
-npm run android
+Schedule sync flow:
+
+```text
+local schedule created/updated
+  -> scheduleStore persists locally
+  -> local notification scheduled
+  -> schedule ID marked dirty
+  -> if relay connected, dirty schedules flush to desktop
+  -> desktop can send schedule snapshot back
+  -> mobile clears synced dirty IDs
 ```
 
-Project health:
+## Cloud Relay And Pairing Workflow
+
+OpenX Mobile is cloud-first. Legacy local QR/LAN pairing is not the product flow. Android cleartext traffic is disabled, so the app does not silently fall back to insecure local `ws://` behavior.
+
+Pairing workflow:
+
+```text
+OpenX Desktop connected to relay
+  -> desktop generates Cloud QR
+  -> mobile QRPairingScreen scans QR
+  -> qrPairing service validates payload
+  -> mobile sends pair request through relay
+  -> desktop asks approval
+  -> desktop approves
+  -> mobile stores pairing metadata
+  -> future commands/file transfers use relay
+```
+
+Relay responsibilities in mobile:
+
+- Connect/reconnect to relay.
+- Send assistant command packets.
+- Receive assistant command responses.
+- Send profile sync packets.
+- Send schedule sync packets.
+- Send cloud file transfer packets.
+- Handle relay errors and pending request timeouts.
+
+## File Transfer Workflow
+
+OpenX Mobile supports file selection and cloud relay transfer to/from desktop.
+
+Sender workflow:
+
+```text
+DocumentPicker selects file
+  -> fileTransfer reads metadata and base64 source as needed
+  -> cloudFileTransfer creates transfer metadata
+  -> receiver approval is requested
+  -> one chunk is sent at a time
+  -> receiver acknowledges chunk
+  -> final size/hash check completes transfer
+  -> transfer history is recorded
+```
+
+Receiver workflow:
+
+```text
+incoming metadata packet
+  -> user sees transfer prompt/status
+  -> chunks are accepted and verified
+  -> file is written to app document storage
+  -> completed record appears in Transfers screen
+  -> file can be opened/shared through platform APIs
+```
+
+## OpenX Chat Mobile Runtime Detail
+
+OpenX Chat mobile code under `mobile/src/chat` mirrors the server and desktop chat architecture. It is split into account, connection, crypto, devices, discovery, requests, conversations, messages, mailbox, sync, multi-device, security, transfer, infrastructure, and quality modules.
+
+Chat setup workflow:
+
+```text
+MobileChatPanel
+  -> user enters server URL, username, password
+  -> AccountService registration/login request
+  -> mobile device ID is created/reused
+  -> device registration/trust state is stored
+  -> relationships and mailbox sync become available
+```
+
+Chat send workflow:
+
+```text
+conversation open
+  -> user sends text
+  -> makeLocalMessage creates optimistic local message
+  -> MessageManager / MobileChatPanel API path sends to server
+  -> MessageRouter uses WebSocket/HTTP or queues locally
+  -> local status becomes sending/sent/delivered/queued/failed
+  -> local per-relationship message history is pruned to 300
+```
+
+Chat receive/sync workflow:
+
+```text
+WebSocket message or mailbox poll
+  -> incoming envelope is decoded/decrypted when runtime is available
+  -> local relationship conversation is found or created
+  -> message is stored locally
+  -> mailbox sequence cursor is updated
+  -> UI refreshes conversation list and open chat
+```
+
+Important chat domains:
+
+- `accounts/`: account registration/login API client.
+- `connection/`: WebSocket, heartbeat, recovery, push/wake, presence, background state.
+- `crypto/`: AES, HKDF, random, identity/device/session keys, replay, secure storage.
+- `devices/`: mobile device lifecycle and registry.
+- `discovery/`: username/contact lookup and validation.
+- `requests/`: contact requests, trust, block, nickname.
+- `conversations/`: conversation model, local storage, search, pin, mute, archive, pagination, sorting.
+- `messages/`: message model, validation, encryption pipeline, router, storage, retry, ACK, typing.
+- `mailbox/`: offline envelope recovery and sequence ACK.
+- `synchronization/`: cursor, ACK, sequence, conflict, recovery, retry.
+- `multidevice/`: synchronization copy and device consistency metadata.
+- `security/`: PIN/recovery/trust/session/security policy clients.
+- `infrastructure/`: battery, memory, storage, connection, sync optimization and metrics.
+- `quality/`: crash recovery, production validation, release logging and performance reporting.
+
+## Cryptography And Security Detail
+
+Mobile chat cryptography is modular and uses proven primitives. The mobile code does not define a new cryptographic algorithm.
+
+Cryptographic modules found:
+
+| Module | Responsibility |
+|---|---|
+| `AESManager` | AES-GCM encryption/decryption API with WebCrypto and node-forge paths. |
+| `HKDFManager` | HKDF-SHA256 key derivation. |
+| `RandomManager` | Secure random bytes through Expo Crypto. |
+| `IdentityManager` | Identity key lifecycle. |
+| `KeyManager` | Device/session key generation and validation. |
+| `SessionManager` | Session creation, validation, expiration, renewal, destruction. |
+| `ReplayManager` | Nonce replay detection. |
+| `KeyRotation` | Rotation framework. |
+| `SecureStorageManager` | Local secret persistence abstraction. |
+| `CryptoValidation` | Key, IV, tag, nonce, fingerprint validation. |
+
+Security rules:
+
+- Private keys and raw session keys must not be logged.
+- Message plaintext must not be written to logs.
+- Passwords must not be logged.
+- SecureStore is used for the cloud E2EE master key.
+- AsyncStorage stores normal app state and encrypted/structured chat state.
+- Android cleartext traffic is disabled.
+- QR pairing requires Cloud QR payloads rather than legacy local payloads.
+
+## UI And UX Structure
+
+OpenX Mobile uses a dark glass visual language with iOS-style segmented sliders, fixed bottom dock navigation, rounded panels, and icon-first controls.
+
+Important UI components:
+
+- `ScreenBackground`: shared page background.
+- `GlassPanel`: reusable translucent panel.
+- `GlassButton`: reusable themed button.
+- `SegmentedSlider`: iOS-style segmented control.
+- `MobileBottomDock`: fixed bottom app navigation.
+- `ChatBubble`: assistant/user message and structured result rendering.
+- `OpenXNotice`: user-facing notice/toast surface.
+- `FadeInView`: lightweight entrance animation.
+
+Primary screens:
+
+- `HomeScreen`: assistant command and chat top-level switch.
+- `MobileChatPanel`: OpenX Chat list/conversation/setup/recovery UI.
+- `CalendarScreen`: calendar, day plan, reminders, alarms, timers, schedule popup.
+- `QRPairingScreen`: camera QR pairing.
+- `TransfersScreen`: send/receive transfer history.
+- `SettingsScreen`: system/profile/settings controls.
+- `ProfileScreen`: profile editing.
+
+## Performance And Stability Strategy
+
+Mobile performance matters because chat, relay, local schedules, file transfer, and UI all run in one React Native app. Current strategies visible in code:
+
+- Top-level `AppErrorBoundary` can restart the React interface without clearing pairing or transfer history.
+- Mobile chat panel has local recovery and `clearMobileChatStorage` for corrupted local chat state.
+- Message lists use `FlatList`.
+- Chat messages are capped per relationship.
+- Assistant chat history is capped.
+- Transfer history is bounded.
+- Schedule dirty IDs are tracked for incremental sync.
+- Connection managers separate heartbeat, recovery, presence, background, push, and network logic.
+- Infrastructure modules include battery, memory, storage, connection, synchronization, metrics, monitoring, and performance managers.
+- Android cleartext traffic is disabled for safer production networking.
+
+## Production Readiness Notes
+
+Before a mobile release, verify:
+
+- `npm run doctor` passes from `OpenX_Mobile/mobile`.
+- App starts on a clean install.
+- QR scanner requests camera permission and scans Cloud QR payloads.
+- Legacy/local QR payloads are rejected with useful text.
+- Cloud relay connect/reconnect works after app background/foreground.
+- Desktop command forwarding works when desktop is connected.
+- Local schedule parsing works when desktop is disconnected.
+- Dirty schedule sync flushes after reconnect.
+- Local notifications fire for reminders, alarms, and timers.
+- File send and receive works with checksum verification.
+- OpenX Chat account setup works against the deployed chat server.
+- Contact discovery/request/accept flow works.
+- Mobile messages send, receive, and mailbox sync after reconnect.
+- Chat local state cap stays at 300 messages per relationship.
+- Recovery UI appears instead of app crash on corrupt chat state.
+- No logs expose passwords, raw private keys, session keys, message plaintext, or E2EE master keys.
+
+## Important Risks And Follow-Up Areas
+
+- Mobile chat currently contains both a full modular chat runtime and a screen-level chat implementation. Keep their contracts aligned so message status, mailbox sync, and storage behavior do not diverge.
+- SecureStorageManager under `mobile/src/chat/crypto` uses an abstraction backed by AsyncStorage in code paths; production key material should continue moving toward platform secure storage wherever feasible.
+- WebCrypto availability varies by React Native runtime. The node-forge fallback path must remain tested.
+- File transfer uses base64 in Expo file APIs. Very large files should be tested carefully for mobile memory pressure.
+- Schedule language parsing is deterministic and strong for common reminders/alarms/timers, but it is not the full desktop NLP pipeline. Connected desktop should remain the authority for complex commands.
+- Background delivery and push wake behavior must be tested on real Android/iOS devices because simulator behavior differs.
+
+## Validation Performed For This Documentation Update
+
+This update is documentation-only. Runtime tests are not required for this report rewrite. Recommended validation commands:
 
 ```powershell
+cd OpenX_Mobile\mobile
 npm run doctor
+node tests\mobile-schedule-intelligence.test.js
 ```
 
-EAS build profiles are defined in:
-
-```text
-eas.json
-```
-
-Common Android build commands:
+Markdown whitespace validation used for this report:
 
 ```powershell
-eas build --profile development --platform android
-eas build --profile preview --platform android
-eas build --profile production --platform android
+$bad=@(); $i=0; Get-Content report.md | ForEach-Object { $i++; if ($_ -match '\s+$') { $bad += $i } }; if ($bad.Count) { "Trailing whitespace lines: $($bad -join ', ')"; exit 1 } else { 'No trailing whitespace found.' }
 ```
 
-Android config highlights:
-
-- package: `com.openx.mobile`;
-- portrait orientation;
-- dark UI style;
-- camera permission for QR pairing;
-- local cleartext WebSocket traffic enabled for `ws://` desktop connections;
-- software keyboard resize enabled so chat input remains visible while typing.
-
-## 13. Full Filtered Directory Tree
+The filtered file count was also rechecked after generation:
 
 ```text
-OpenX_Mobile/mobile/
-|-- assets/
-|   `-- logo.png
-|-- src/
-|   |-- components/
-|   |   |-- ChatBubble.jsx
-|   |   |-- FadeInView.jsx
-|   |   |-- GlassButton.jsx
-|   |   |-- GlassPanel.jsx
-|   |   `-- ScreenBackground.jsx
-|   |-- context/
-|   |   `-- AppContext.jsx
-|   |-- navigation/
-|   |   `-- AppNavigator.jsx
-|   |-- screens/
-|   |   |-- HomeScreen.jsx
-|   |   |-- QRPairingScreen.jsx
-|   |   |-- SettingsScreen.jsx
-|   |   `-- TransfersScreen.jsx
-|   |-- services/
-|   |   |-- fileTransfer.js
-|   |   |-- permissions.js
-|   |   |-- qrPairing.js
-|   |   |-- session.js
-|   |   `-- websocket.js
-|   `-- styles/
-|       `-- theme.js
-|-- .gitignore
-|-- App.js
-|-- app.json
-|-- babel.config.js
-|-- eas.json
-|-- package.json
-|-- package-lock.json
-|-- README.md
-`-- report.md
+223 files after exclusions
+```
+
+## Full Filtered Directory Tree
+
+The tree below includes all files and folders from the filtered scan. Dependency/generated/local-heavy folders are shown by folder name with contents omitted.
+
+```text
+OpenX_Mobile/
+|-- .codex/
+|   `-- hooks.json
+|-- .idea/
+|   |-- caches/
+|   |   `-- deviceStreaming.xml
+|   |-- .gitignore
+|   |-- deviceManager.xml
+|   |-- misc.xml
+|   |-- modules.xml
+|   |-- OpenX Mobile.iml
+|   |-- vcs.xml
+|   `-- workspace.xml
+|-- graphify-out/ (contents omitted)
+|-- mobile/
+|   |-- .expo/ (contents omitted)
+|   |-- .git/ (contents omitted)
+|   |-- assets/
+|   |   `-- logo.png
+|   |-- node_modules/ (contents omitted)
+|   |-- plugins/
+|   |-- src/
+|   |   |-- chat/
+|   |   |   |-- accounts/
+|   |   |   |   |-- AccountService.js
+|   |   |   |   `-- index.js
+|   |   |   |-- connection/
+|   |   |   |   |-- BackgroundManager.js
+|   |   |   |   |-- ConnectionConfiguration.js
+|   |   |   |   |-- ConnectionEngine.js
+|   |   |   |   |-- ConnectionEvents.js
+|   |   |   |   |-- ConnectionLogger.js
+|   |   |   |   |-- HeartbeatManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- NetworkMonitor.js
+|   |   |   |   |-- PresenceManager.js
+|   |   |   |   |-- PushManager.js
+|   |   |   |   |-- RecoveryManager.js
+|   |   |   |   |-- SessionManager.js
+|   |   |   |   `-- WakeManager.js
+|   |   |   |-- conversations/
+|   |   |   |   |-- ArchiveManager.js
+|   |   |   |   |-- ConversationConfiguration.js
+|   |   |   |   |-- ConversationEvents.js
+|   |   |   |   |-- ConversationLogger.js
+|   |   |   |   |-- ConversationManager.js
+|   |   |   |   |-- ConversationModel.js
+|   |   |   |   |-- ConversationService.js
+|   |   |   |   |-- ConversationStorage.js
+|   |   |   |   |-- ConversationValidation.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- IndexManager.js
+|   |   |   |   |-- MuteManager.js
+|   |   |   |   |-- PaginationManager.js
+|   |   |   |   |-- PinManager.js
+|   |   |   |   |-- SearchManager.js
+|   |   |   |   |-- SearchService.js
+|   |   |   |   `-- SortingManager.js
+|   |   |   |-- crypto/
+|   |   |   |   |-- AESManager.js
+|   |   |   |   |-- CryptoConfiguration.js
+|   |   |   |   |-- CryptoErrors.js
+|   |   |   |   |-- CryptoEvents.js
+|   |   |   |   |-- CryptoLogger.js
+|   |   |   |   |-- CryptoManager.js
+|   |   |   |   |-- CryptoValidation.js
+|   |   |   |   |-- Encoding.js
+|   |   |   |   |-- HKDFManager.js
+|   |   |   |   |-- IdentityManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- KeyManager.js
+|   |   |   |   |-- KeyRotation.js
+|   |   |   |   |-- RandomManager.js
+|   |   |   |   |-- ReplayManager.js
+|   |   |   |   |-- SecureStorageManager.js
+|   |   |   |   `-- SessionManager.js
+|   |   |   |-- devices/
+|   |   |   |   |-- DeviceConfiguration.js
+|   |   |   |   |-- DeviceEvents.js
+|   |   |   |   |-- DeviceLifecycle.js
+|   |   |   |   |-- DeviceLogger.js
+|   |   |   |   |-- DeviceManager.js
+|   |   |   |   |-- DeviceRegistry.js
+|   |   |   |   |-- DeviceService.js
+|   |   |   |   |-- DeviceStatus.js
+|   |   |   |   `-- index.js
+|   |   |   |-- discovery/
+|   |   |   |   |-- ContactDiscoveryManager.js
+|   |   |   |   |-- DiscoveryConfiguration.js
+|   |   |   |   |-- DiscoveryEvents.js
+|   |   |   |   |-- DiscoveryLogger.js
+|   |   |   |   |-- DiscoveryService.js
+|   |   |   |   |-- DiscoveryValidation.js
+|   |   |   |   `-- index.js
+|   |   |   |-- infrastructure/
+|   |   |   |   |-- BatteryOptimizer.js
+|   |   |   |   |-- ConnectionOptimizer.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- InfrastructureEvents.js
+|   |   |   |   |-- MemoryOptimizer.js
+|   |   |   |   |-- MetricsManager.js
+|   |   |   |   |-- MonitoringManager.js
+|   |   |   |   |-- PerformanceManager.js
+|   |   |   |   |-- StorageOptimizer.js
+|   |   |   |   `-- SynchronizationOptimizer.js
+|   |   |   |-- mailbox/
+|   |   |   |   |-- AcknowledgementManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- MailboxClient.js
+|   |   |   |   |-- MailboxConfiguration.js
+|   |   |   |   |-- MailboxEvents.js
+|   |   |   |   |-- MailboxLogger.js
+|   |   |   |   |-- MailboxManager.js
+|   |   |   |   |-- MailboxSyncManager.js
+|   |   |   |   `-- SequenceManager.js
+|   |   |   |-- messages/
+|   |   |   |   |-- AcknowledgementManager.js
+|   |   |   |   |-- CompressionManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- MessageClient.js
+|   |   |   |   |-- MessageConfiguration.js
+|   |   |   |   |-- MessageConstants.js
+|   |   |   |   |-- MessageEvents.js
+|   |   |   |   |-- MessageLogger.js
+|   |   |   |   |-- MessageManager.js
+|   |   |   |   |-- MessageModel.js
+|   |   |   |   |-- MessagePipeline.js
+|   |   |   |   |-- MessageRouter.js
+|   |   |   |   |-- MessageStorage.js
+|   |   |   |   |-- MessageValidation.js
+|   |   |   |   |-- RetryManager.js
+|   |   |   |   `-- TypingManager.js
+|   |   |   |-- multidevice/
+|   |   |   |   |-- DeviceConsistencyManager.js
+|   |   |   |   |-- DeviceEvents.js
+|   |   |   |   |-- DeviceLogger.js
+|   |   |   |   |-- DeviceSynchronizationManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- MultiDeviceClient.js
+|   |   |   |   |-- MultiDeviceConfiguration.js
+|   |   |   |   |-- MultiDeviceManager.js
+|   |   |   |   `-- SynchronizationCopyManager.js
+|   |   |   |-- quality/
+|   |   |   |   |-- CrashRecoveryManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- PerformanceReporter.js
+|   |   |   |   |-- ProductionValidator.js
+|   |   |   |   |-- QualityManager.js
+|   |   |   |   `-- ReleaseLogger.js
+|   |   |   |-- requests/
+|   |   |   |   |-- BlockManager.js
+|   |   |   |   |-- ContactRequestManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- NicknameManager.js
+|   |   |   |   |-- RequestConfiguration.js
+|   |   |   |   |-- RequestEvents.js
+|   |   |   |   |-- RequestLogger.js
+|   |   |   |   |-- RequestService.js
+|   |   |   |   |-- RequestValidation.js
+|   |   |   |   `-- TrustManager.js
+|   |   |   |-- security/
+|   |   |   |   |-- index.js
+|   |   |   |   |-- RecoveryManager.js
+|   |   |   |   |-- RegistrationPinManager.js
+|   |   |   |   |-- SecurityClient.js
+|   |   |   |   |-- SecurityEvents.js
+|   |   |   |   |-- SecurityLogger.js
+|   |   |   |   |-- SecurityManager.js
+|   |   |   |   |-- SecurityPolicyManager.js
+|   |   |   |   |-- SessionManager.js
+|   |   |   |   `-- TrustManager.js
+|   |   |   |-- synchronization/
+|   |   |   |   |-- ACKManager.js
+|   |   |   |   |-- ConflictManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- RecoveryManager.js
+|   |   |   |   |-- RetryManager.js
+|   |   |   |   |-- SequenceManager.js
+|   |   |   |   |-- SynchronizationClient.js
+|   |   |   |   |-- SynchronizationConfiguration.js
+|   |   |   |   |-- SynchronizationCursor.js
+|   |   |   |   |-- SynchronizationEngine.js
+|   |   |   |   |-- SynchronizationEvents.js
+|   |   |   |   |-- SynchronizationLogger.js
+|   |   |   |   `-- SynchronizationManager.js
+|   |   |   |-- transfer/
+|   |   |   |   |-- BlobClient.js
+|   |   |   |   |-- DownloadManager.js
+|   |   |   |   |-- index.js
+|   |   |   |   |-- IntegrityManager.js
+|   |   |   |   |-- ThumbnailManager.js
+|   |   |   |   |-- TransferConfiguration.js
+|   |   |   |   |-- TransferEvents.js
+|   |   |   |   |-- TransferLogger.js
+|   |   |   |   |-- TransferManager.js
+|   |   |   |   `-- UploadManager.js
+|   |   |   |-- ChatConfiguration.js
+|   |   |   |-- ChatConnectionManager.js
+|   |   |   |-- ChatEventBus.js
+|   |   |   |-- ChatEvents.js
+|   |   |   |-- ChatHealth.js
+|   |   |   |-- ChatHooks.js
+|   |   |   |-- ChatLifecycle.js
+|   |   |   |-- ChatLogger.js
+|   |   |   |-- ChatManager.js
+|   |   |   |-- ChatProvider.js
+|   |   |   |-- ChatStatusManager.js
+|   |   |   |-- ChatStorage.js
+|   |   |   |-- ChatVersionManager.js
+|   |   |   `-- index.js
+|   |   |-- components/
+|   |   |   |-- ChatBubble.jsx
+|   |   |   |-- FadeInView.jsx
+|   |   |   |-- GlassButton.jsx
+|   |   |   |-- GlassPanel.jsx
+|   |   |   |-- MobileBottomDock.jsx
+|   |   |   |-- OpenXNotice.jsx
+|   |   |   |-- ScreenBackground.jsx
+|   |   |   `-- SegmentedSlider.jsx
+|   |   |-- context/
+|   |   |   `-- AppContext.jsx
+|   |   |-- navigation/
+|   |   |   `-- AppNavigator.jsx
+|   |   |-- screens/
+|   |   |   |-- CalendarScreen.jsx
+|   |   |   |-- HomeScreen.jsx
+|   |   |   |-- MobileChatPanel.jsx
+|   |   |   |-- ProfileScreen.jsx
+|   |   |   |-- QRPairingScreen.jsx
+|   |   |   |-- SettingsScreen.jsx
+|   |   |   `-- TransfersScreen.jsx
+|   |   |-- services/
+|   |   |   |-- cloudFileTransfer.js
+|   |   |   |-- e2ee.js
+|   |   |   |-- fileTransfer.js
+|   |   |   |-- mobileScheduleIntelligence.js
+|   |   |   |-- permissions.js
+|   |   |   |-- qrPairing.js
+|   |   |   |-- relayClient.js
+|   |   |   |-- scheduleStore.js
+|   |   |   |-- session.js
+|   |   |   `-- websocket.js
+|   |   `-- styles/
+|   |       `-- theme.js
+|   |-- tests/
+|   |   `-- mobile-schedule-intelligence.test.js
+|   |-- .gitignore
+|   |-- app.config.js
+|   |-- App.js
+|   |-- babel.config.js
+|   |-- eas.json
+|   |-- package-lock.json
+|   |-- package.json
+|   |-- README.md
+|   `-- report.md
+|-- AGENTS.md
+|-- report.md
+`-- view.xml
 ```
