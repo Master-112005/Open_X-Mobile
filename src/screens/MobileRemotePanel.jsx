@@ -21,6 +21,12 @@ const CONTROL_ICONS = Object.freeze({
   back: 'arrow-undo-outline',
   playPause: 'play',
   fullscreen: 'expand-outline',
+  next: 'play-skip-forward',
+  previous: 'play-skip-back',
+  seekBack: 'play-back',
+  seekForward: 'play-forward',
+  slideshow: 'easel-outline',
+  exit: 'exit-outline',
 });
 
 const ACTION_LABELS = Object.freeze({
@@ -32,10 +38,30 @@ const ACTION_LABELS = Object.freeze({
   back: 'Back',
   playPause: 'Play',
   fullscreen: 'Full',
+  next: 'Next',
+  previous: 'Prev',
+  seekBack: '-10s',
+  seekForward: '+10s',
+  slideshow: 'Slide show',
+  exit: 'Exit',
 });
 
-const SHORTCUT_ACTIONS = Object.freeze(['back', 'playPause', 'fullscreen']);
 const DIRECTION_ACTIONS = Object.freeze(['up', 'left', 'center', 'right', 'down']);
+const MEDIA_ACTIONS = Object.freeze(['previous', 'playPause', 'next', 'seekBack', 'seekForward', 'fullscreen']);
+const PRESENTATION_ACTIONS = Object.freeze(['slideshow', 'previous', 'next', 'exit']);
+const SOCIAL_ACTIONS = Object.freeze(['left', 'center', 'right', 'back']);
+const GENERIC_ACTIONS = Object.freeze(['back', 'center', 'fullscreen']);
+
+const APP_ACTION_GROUPS = Object.freeze({
+  youtube: MEDIA_ACTIONS,
+  spotify: Object.freeze(['previous', 'playPause', 'next']),
+  powerpoint: PRESENTATION_ACTIONS,
+  instagram: SOCIAL_ACTIONS,
+  media: MEDIA_ACTIONS,
+  presentation: PRESENTATION_ACTIONS,
+  social: SOCIAL_ACTIONS,
+  default: GENERIC_ACTIONS,
+});
 
 const TARGET_ICONS = Object.freeze({
   youtube: 'logo-youtube',
@@ -45,10 +71,14 @@ const TARGET_ICONS = Object.freeze({
 });
 
 const TARGET_ACTIONS = Object.freeze({
-  youtube: new Set([...DIRECTION_ACTIONS, ...SHORTCUT_ACTIONS]),
-  powerpoint: new Set([...DIRECTION_ACTIONS, ...SHORTCUT_ACTIONS]),
-  instagram: new Set([...DIRECTION_ACTIONS, 'back']),
-  spotify: new Set([...DIRECTION_ACTIONS, 'back', 'playPause']),
+  youtube: new Set([...DIRECTION_ACTIONS, ...MEDIA_ACTIONS, 'back']),
+  powerpoint: new Set([...DIRECTION_ACTIONS, ...PRESENTATION_ACTIONS, 'playPause', 'fullscreen', 'back']),
+  instagram: new Set([...DIRECTION_ACTIONS, ...SOCIAL_ACTIONS]),
+  spotify: new Set([...DIRECTION_ACTIONS, 'previous', 'playPause', 'next', 'back']),
+  media: new Set([...DIRECTION_ACTIONS, ...MEDIA_ACTIONS, 'back']),
+  presentation: new Set([...DIRECTION_ACTIONS, ...PRESENTATION_ACTIONS, 'playPause', 'fullscreen', 'back']),
+  social: new Set([...DIRECTION_ACTIONS, ...SOCIAL_ACTIONS]),
+  default: new Set([...DIRECTION_ACTIONS, ...GENERIC_ACTIONS]),
 });
 
 function targetKey(target) {
@@ -74,9 +104,21 @@ function targetIconName(target) {
   return 'tv-outline';
 }
 
-function isActionSupported(target, action) {
+function targetProfile(target) {
   const id = String(target?.id || '').toLowerCase();
-  return !TARGET_ACTIONS[id] || TARGET_ACTIONS[id].has(action);
+  if (APP_ACTION_GROUPS[id]) return id;
+  const kind = String(target?.kind || '').toLowerCase();
+  if (APP_ACTION_GROUPS[kind]) return kind;
+  return 'default';
+}
+
+function remoteActionsForTarget(target) {
+  return APP_ACTION_GROUPS[targetProfile(target)] || APP_ACTION_GROUPS.default;
+}
+
+function isActionSupported(target, action) {
+  const profile = targetProfile(target);
+  return !TARGET_ACTIONS[profile] || TARGET_ACTIONS[profile].has(action);
 }
 
 function statusTone({ connected, hasTargets, busy }) {
@@ -92,6 +134,10 @@ function friendlyRemoteStatus({ connected, busy, selectedTarget, remoteControlSt
   if (explicit) return explicit;
   if (!selectedTarget) return 'Open a supported desktop app, then scan.';
   return `${selectedTarget.label || 'App'} is ready.`;
+}
+
+function isRoutineReadyStatus(value) {
+  return /^\d+\s+active\s+remote\s+apps?\s+found\.$/i.test(String(value || '').trim());
 }
 
 function RemotePadButton({ action, disabled, onPress, style, size = 58 }) {
@@ -136,7 +182,7 @@ function RemoteActionPill({ action, disabled, onPress, unsupported }) {
       <Ionicons
         color={unsupported ? colors.textMuted : colors.text}
         name={unsupported ? 'remove-circle-outline' : CONTROL_ICONS[action] || 'ellipse'}
-        size={18}
+        size={19}
       />
       <Text
         numberOfLines={1}
@@ -230,10 +276,13 @@ export default function MobileRemotePanel({
   const isControlDisabled = useCallback((action) => (
     !connected || !selectedTarget || remoteControlBusy || !isActionSupported(selectedTarget, action)
   ), [connected, remoteControlBusy, selectedTarget]);
+  const quickActions = useMemo(() => remoteActionsForTarget(selectedTarget), [selectedTarget]);
   const activeTitle = selectedTarget?.tabTitle || selectedTarget?.windowTitle || selectedTarget?.label || 'No active app';
   const tone = statusTone({ connected, hasTargets: safeRemoteTargets.length > 0, busy: remoteControlBusy });
   const statusIcon = tone === 'ready' ? 'checkmark-circle' : tone === 'info' ? 'sync-outline' : 'alert-circle-outline';
   const statusMessage = friendlyRemoteStatus({ connected, busy: remoteControlBusy, selectedTarget, remoteControlStatus });
+  const explicitStatus = String(remoteControlStatus || '').trim();
+  const showStatus = tone !== 'ready' || (Boolean(explicitStatus) && !isRoutineReadyStatus(explicitStatus));
 
   return (
     <View style={[styles.container, { paddingBottom: bottomPadding, paddingTop: topPadding }]}>
@@ -267,9 +316,6 @@ export default function MobileRemotePanel({
         <View style={styles.targetPanelHeader}>
           <View style={styles.targetPanelCopy}>
             <Text style={styles.sectionLabel}>Active app</Text>
-            <Text numberOfLines={1} style={styles.sectionHint}>
-              Apps appear here only when they are open on Desktop.
-            </Text>
           </View>
           <Text style={styles.targetCount}>{safeRemoteTargets.length}</Text>
         </View>
@@ -336,16 +382,6 @@ export default function MobileRemotePanel({
       </LinearGradient>
 
       <View style={styles.stage}>
-        <View style={styles.stageLabel}>
-          <Ionicons
-            color={colors.textSecondary}
-            name={selectedTarget ? targetIconName(selectedTarget) : 'phone-portrait-outline'}
-            size={18}
-          />
-          <Text numberOfLines={1} style={styles.stageLabelText}>
-            {selectedTarget?.label || 'Choose an app'}
-          </Text>
-        </View>
         <LinearGradient
           colors={gradients.glassSoft}
           end={{ x: 1, y: 1 }}
@@ -368,7 +404,7 @@ export default function MobileRemotePanel({
             action="center"
             disabled={isControlDisabled('center')}
             onPress={handleRemoteAction}
-            size={72}
+            size={66}
             style={styles.padCenter}
           />
           <RemotePadButton
@@ -386,8 +422,8 @@ export default function MobileRemotePanel({
         </LinearGradient>
       </View>
 
-      <View style={styles.actions}>
-        {SHORTCUT_ACTIONS.map((action) => {
+      <View style={styles.actionGrid}>
+        {quickActions.map((action) => {
           const unsupported = selectedTarget ? !isActionSupported(selectedTarget, action) : false;
           return (
             <RemoteActionPill
@@ -401,16 +437,18 @@ export default function MobileRemotePanel({
         })}
       </View>
 
-      <View style={[styles.statusCard, styles[`status_${tone}`]]}>
-        <Ionicons
-          color={tone === 'ready' ? colors.success : tone === 'info' ? colors.textSecondary : colors.warning}
-          name={statusIcon}
-          size={17}
-        />
-        <Text numberOfLines={2} style={styles.status}>
-          {statusMessage}
-        </Text>
-      </View>
+      {showStatus ? (
+        <View style={[styles.statusCard, styles[`status_${tone}`]]}>
+          <Ionicons
+            color={tone === 'ready' ? colors.success : tone === 'info' ? colors.textSecondary : colors.warning}
+            name={statusIcon}
+            size={17}
+          />
+          <Text numberOfLines={2} style={styles.status}>
+            {statusMessage}
+          </Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -424,7 +462,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   headerCopy: {
     flex: 1,
@@ -432,7 +470,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 30,
+    fontSize: 25,
     fontWeight: '900',
     letterSpacing: 0,
   },
@@ -449,15 +487,15 @@ const styles = StyleSheet.create({
     borderColor: colors.borderBright,
     borderRadius: radius.round,
     borderWidth: 1,
-    height: 48,
+    height: 44,
     justifyContent: 'center',
-    width: 48,
+    width: 44,
   },
   targetRow: {
     alignItems: 'center',
     gap: spacing.sm,
-    minHeight: 56,
-    paddingTop: spacing.sm,
+    minHeight: 50,
+    paddingTop: spacing.xs,
   },
   targetPanel: {
     ...shadows.card,
@@ -466,7 +504,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     overflow: 'hidden',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   targetPanelHeader: {
     alignItems: 'center',
@@ -484,12 +522,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     textTransform: 'uppercase',
   },
-  sectionHint: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '700',
-    marginTop: 2,
-  },
   targetCount: {
     backgroundColor: colors.glassSubtle,
     borderColor: colors.border,
@@ -498,7 +530,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     fontWeight: '900',
-    minWidth: 34,
+    minWidth: 32,
     overflow: 'hidden',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
@@ -512,10 +544,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 54,
-    maxWidth: 188,
-    minWidth: 132,
-    paddingHorizontal: spacing.md,
+    height: 48,
+    maxWidth: 174,
+    minWidth: 122,
+    paddingHorizontal: spacing.sm,
   },
   targetChipActive: {
     backgroundColor: colors.primary,
@@ -551,7 +583,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 52,
+    height: 48,
     paddingHorizontal: spacing.md,
   },
   emptyChipText: {
@@ -563,36 +595,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
-    minHeight: 258,
-    paddingVertical: spacing.lg,
-  },
-  stageLabel: {
-    alignItems: 'center',
-    backgroundColor: colors.glassSubtle,
-    borderColor: colors.border,
-    borderRadius: radius.round,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.md,
-    maxWidth: '88%',
-    minHeight: 38,
-    paddingHorizontal: spacing.md,
-  },
-  stageLabelText: {
-    color: colors.textSecondary,
-    flexShrink: 1,
-    fontSize: 13,
-    fontWeight: '900',
+    minHeight: 214,
+    paddingVertical: spacing.md,
   },
   remoteDisc: {
     ...shadows.floating,
     borderColor: colors.borderBright,
-    borderRadius: 128,
+    borderRadius: 112,
     borderWidth: 1,
-    height: 244,
+    height: 216,
     position: 'relative',
-    width: 244,
+    width: 216,
   },
   padButton: {
     alignItems: 'center',
@@ -604,25 +617,25 @@ const styles = StyleSheet.create({
     position: 'absolute',
   },
   padUp: {
-    left: 93,
-    top: 18,
+    left: 80,
+    top: 14,
   },
   padDown: {
-    bottom: 18,
-    left: 93,
+    bottom: 14,
+    left: 80,
   },
   padLeft: {
-    left: 18,
-    top: 93,
+    left: 14,
+    top: 80,
   },
   padRight: {
-    right: 18,
-    top: 93,
+    right: 14,
+    top: 80,
   },
   padCenter: {
     backgroundColor: colors.primary,
-    left: 86,
-    top: 86,
+    left: 75,
+    top: 75,
   },
   centerLabel: {
     color: colors.background,
@@ -630,11 +643,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: -2,
   },
-  actions: {
+  actionGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     justifyContent: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   actionPill: {
     alignItems: 'center',
@@ -644,10 +658,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 48,
+    height: 46,
     justifyContent: 'center',
     minWidth: 96,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
   },
   actionPillUnsupported: {
     backgroundColor: colors.glassSubtle,

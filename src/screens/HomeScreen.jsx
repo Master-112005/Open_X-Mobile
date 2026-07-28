@@ -82,6 +82,106 @@ function ConnectionDot({ status, onReconnect }) {
   );
 }
 
+function buildConnectionGuidance({ activeConnectionStatus, cloudStatus, paired }) {
+  const status = String(activeConnectionStatus || '').toLowerCase();
+  const connecting = status === 'connecting' || status === 'reconnecting';
+  if (status === 'connected') return null;
+
+  if (!paired) {
+    return {
+      iconName: 'qr-code-outline',
+      title: 'Connect OpenX Desktop',
+      message: 'Scan the QR from OpenX Desktop. The phone can scan even when it shows disconnected.',
+      primaryLabel: 'Scan QR',
+      secondaryLabel: 'Settings',
+      tone: 'warning',
+    };
+  }
+
+  if (connecting) {
+    return {
+      iconName: 'sync-outline',
+      title: 'Reconnecting',
+      message: 'OpenX is restoring the link. You can keep using local reminders while it connects.',
+      primaryLabel: 'Scan QR',
+      secondaryLabel: 'Settings',
+      tone: 'info',
+    };
+  }
+
+  return {
+    iconName: 'cloud-offline-outline',
+    title: 'Desktop disconnected',
+    message: cloudStatus?.friendlyMessage || 'Reconnect to the relay, or scan a fresh QR if Desktop pairing changed.',
+    primaryLabel: 'Reconnect',
+    secondaryLabel: 'Scan QR',
+    tone: 'warning',
+  };
+}
+
+function ConnectionRecoveryCard({
+  compact = false,
+  guidance,
+  onReconnect,
+  onScanQr,
+  onSettings,
+}) {
+  if (!guidance) return null;
+  const primaryIsReconnect = guidance.primaryLabel === 'Reconnect';
+  const secondaryIsSettings = guidance.secondaryLabel === 'Settings';
+
+  return (
+    <LinearGradient
+      colors={gradients.glassSoft}
+      style={[styles.connectionCard, compact && styles.connectionCardCompact]}
+    >
+      <View style={styles.connectionCardHeader}>
+        <View style={[styles.connectionCardIcon, styles[`connectionCardIcon_${guidance.tone}`]]}>
+          <Ionicons color={colors.text} name={guidance.iconName} size={22} />
+        </View>
+        <View style={styles.connectionCardCopy}>
+          <Text style={styles.connectionCardTitle}>{guidance.title}</Text>
+          <Text style={styles.connectionCardText}>{guidance.message}</Text>
+        </View>
+      </View>
+      <View style={styles.connectionCardActions}>
+        <Pressable
+          accessibilityLabel={guidance.primaryLabel}
+          accessibilityRole="button"
+          onPress={primaryIsReconnect ? onReconnect : onScanQr}
+          style={({ pressed }) => [
+            styles.connectionPrimaryAction,
+            pressed && styles.smallPressed,
+          ]}
+        >
+          <Ionicons
+            color={colors.background}
+            name={primaryIsReconnect ? 'refresh' : 'qr-code-outline'}
+            size={18}
+          />
+          <Text style={styles.connectionPrimaryText}>{guidance.primaryLabel}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel={guidance.secondaryLabel}
+          accessibilityRole="button"
+          onPress={secondaryIsSettings ? onSettings : onScanQr}
+          style={({ pressed }) => [
+            styles.connectionSecondaryAction,
+            pressed && styles.smallPressed,
+          ]}
+        >
+          <Ionicons
+            color={colors.text}
+            name={secondaryIsSettings ? 'settings-outline' : 'qr-code-outline'}
+            size={18}
+          />
+          <Text style={styles.connectionSecondaryText}>{guidance.secondaryLabel}</Text>
+        </Pressable>
+      </View>
+    </LinearGradient>
+  );
+}
+
 export default function HomeScreen({ navigation }) {
   const {
     messages,
@@ -155,6 +255,11 @@ export default function HomeScreen({ navigation }) {
     const source = String(imagePreview?.imageUri || imagePreview?.thumbnailUri || imagePreview?.uri || imagePreview?.url || '');
     return /^(?:https?:|file:|content:|data:image\/)/i.test(source) ? source : '';
   }, [imagePreview]);
+  const connectionGuidance = useMemo(() => buildConnectionGuidance({
+    activeConnectionStatus,
+    cloudStatus,
+    paired,
+  }), [activeConnectionStatus, cloudStatus, paired]);
 
   const composerHint = useMemo(() => {
     if (selectedFile) return selectedFile.fileName;
@@ -233,6 +338,23 @@ export default function HomeScreen({ navigation }) {
       showNotice({ title: 'Unable to reconnect', message: error.message || 'Unable to reconnect OpenX.', tone: 'error' });
     });
   }, [reconnectActiveConnection, showNotice]);
+  const handleOpenPairing = useCallback(() => {
+    navigation.navigate('QRPairing');
+  }, [navigation]);
+  const handleOpenSettings = useCallback(() => {
+    navigation.navigate('Settings');
+  }, [navigation]);
+  const assistantConnectionCard = useMemo(() => (
+    connectionGuidance ? (
+      <ConnectionRecoveryCard
+        compact={messages.length > 0}
+        guidance={connectionGuidance}
+        onReconnect={handleReconnect}
+        onScanQr={handleOpenPairing}
+        onSettings={handleOpenSettings}
+      />
+    ) : null
+  ), [connectionGuidance, handleOpenPairing, handleOpenSettings, handleReconnect, messages.length]);
 
   return (
     <ScreenBackground>
@@ -259,6 +381,7 @@ export default function HomeScreen({ navigation }) {
             <FlatList
               contentContainerStyle={[
                 styles.listContent,
+                connectionGuidance && messages.length === 0 && styles.listContentRecovery,
                 { paddingTop: topControlsHeight + spacing.md, paddingBottom: assistantDockHeight + spacing.xl },
               ]}
               data={messages}
@@ -266,6 +389,7 @@ export default function HomeScreen({ navigation }) {
               keyExtractor={keyMessage}
               keyboardDismissMode="interactive"
               keyboardShouldPersistTaps="handled"
+              ListHeaderComponent={assistantConnectionCard}
               maxToRenderPerBatch={8}
               onContentSizeChange={scrollToNewest}
               onLayout={scrollToNewest}
@@ -489,6 +613,97 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'flex-end',
     paddingHorizontal: spacing.lg,
+  },
+  listContentRecovery: {
+    justifyContent: 'center',
+  },
+  connectionCard: {
+    ...shadows.card,
+    borderColor: colors.border,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    gap: spacing.lg,
+    marginBottom: spacing.lg,
+    overflow: 'hidden',
+    padding: spacing.lg,
+  },
+  connectionCardCompact: {
+    marginBottom: spacing.md,
+  },
+  connectionCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  connectionCardIcon: {
+    alignItems: 'center',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  connectionCardIcon_warning: {
+    backgroundColor: 'rgba(246, 185, 74, 0.13)',
+    borderColor: 'rgba(246, 185, 74, 0.30)',
+  },
+  connectionCardIcon_info: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.borderBright,
+  },
+  connectionCardCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  connectionCardTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  connectionCardText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    marginTop: 4,
+  },
+  connectionCardActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  connectionPrimaryAction: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderRadius: radius.round,
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: spacing.md,
+  },
+  connectionSecondaryAction: {
+    alignItems: 'center',
+    backgroundColor: colors.glassStrong,
+    borderColor: colors.borderBright,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: spacing.md,
+  },
+  connectionPrimaryText: {
+    color: colors.background,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  connectionSecondaryText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
   },
   assistantDock: {
     bottom: 0,

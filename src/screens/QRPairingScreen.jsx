@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
   Animated,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
@@ -25,10 +26,13 @@ import { colors, radius, shadows, spacing } from '../styles/theme';
 export default function QRPairingScreen({ navigation, route }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanLocked, setScanLocked] = useState(false);
+  const [scanError, setScanError] = useState('');
   const [pairing, setPairing] = useState(false);
   const scanProgress = useRef(new Animated.Value(0)).current;
   const {
+    cloudStatus,
     deviceName,
+    paired,
     pairCloudDevice,
     showNotice,
   } = useApp();
@@ -36,8 +40,26 @@ export default function QRPairingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
   const bottomDockHeight = getMobileBottomDockHeight(insets);
-  const frameSize = Math.max(220, Math.min(width - spacing.xl * 2, height * 0.36, 318));
+  const frameSize = Math.max(196, Math.min(width - spacing.xl * 2, height * 0.31, 300));
   const scanLineMax = Math.max(18, frameSize - 26);
+  const cloudConnected = cloudStatus?.connected === true;
+  const scannerStateLabel = pairing ? 'Pairing' : scanError ? 'Paused' : 'Ready';
+  const canAskCameraPermission = permission?.canAskAgain !== false;
+
+  const resetScanner = useCallback(() => {
+    setScanError('');
+    setScanLocked(false);
+  }, []);
+
+  const openAppSettings = useCallback(() => {
+    Linking.openSettings().catch(() => {
+      showNotice({
+        title: 'Open settings',
+        message: 'Open phone settings and allow camera access for OpenX.',
+        tone: 'warning',
+      });
+    });
+  }, [showNotice]);
 
   useEffect(() => {
     let animation;
@@ -69,28 +91,20 @@ export default function QRPairingScreen({ navigation, route }) {
     };
   }, [permission?.granted, scanProgress]);
 
-  const showScanError = (message) => {
-    showNotice({
-      title: 'Unable to pair',
-      message,
-      tone: 'error',
-      dismissible: false,
-      actions: [
-        { label: 'Home', onPress: () => navigation.popToTop() },
-        { label: 'Scan again', tone: 'primary', onPress: () => setScanLocked(false) },
-      ],
-    });
-  };
+  const showScanError = useCallback((message) => {
+    setScanError(message || 'Pairing failed. Generate a fresh QR and try again.');
+  }, []);
 
   const handleBarcodeScanned = async ({ data }) => {
     if (scanLocked) return;
     setScanLocked(true);
+    setScanError('');
     setPairing(true);
 
     try {
       const payload = parsePairingQrPayload(data);
       if (payload.mode !== 'cloud') {
-        throw new Error('Local pairing is no longer supported. Generate a Cloud QR in OpenX Desktop.');
+        throw new Error('Generate a Cloud QR in OpenX Desktop, then scan it here.');
       }
       await pairCloudDevice({
         relayUrl: payload.relayUrl,
@@ -105,10 +119,11 @@ export default function QRPairingScreen({ navigation, route }) {
         actions: [{ label: 'Continue', tone: 'primary', onPress: () => navigation.popToTop() }],
       });
     } catch (error) {
+      const errorMessage = error?.message || '';
       const message =
-        error.message === 'Invalid or expired pairing code.'
+        errorMessage === 'Invalid or expired pairing code.'
           ? 'Pairing failed.'
-          : error.message;
+          : errorMessage;
       showScanError(message || 'Pairing failed.');
     } finally {
       setPairing(false);
@@ -142,16 +157,24 @@ export default function QRPairingScreen({ navigation, route }) {
             </View>
             <Text style={styles.permissionTitle}>Camera access required</Text>
             <Text style={styles.permissionText}>
-              OpenX uses the camera only to scan the pairing QR code shown by
-              OpenX Desktop.
+              OpenX uses the camera only to scan the pairing QR code shown by OpenX Desktop.
+              Camera frames are not saved.
             </Text>
             <GlassButton
-              iconName="camera-outline"
-              label="Allow camera"
-              onPress={requestPermission}
+              iconName={canAskCameraPermission ? 'camera-outline' : 'settings-outline'}
+              label={canAskCameraPermission ? 'Allow camera' : 'Open phone settings'}
+              onPress={canAskCameraPermission ? requestPermission : openAppSettings}
               style={styles.permissionButton}
               tone="primary"
             />
+            <Pressable
+              accessibilityLabel="Go back home"
+              accessibilityRole="button"
+              onPress={() => navigation.popToTop()}
+              style={({ pressed }) => [styles.permissionLink, pressed && styles.pressed]}
+            >
+              <Text style={styles.permissionLinkText}>Back to OpenX</Text>
+            </Pressable>
           </GlassPanel>
         </FadeInView>
         <MobileBottomDock
@@ -167,7 +190,7 @@ export default function QRPairingScreen({ navigation, route }) {
       <CameraView
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
         facing="back"
-        onBarcodeScanned={scanLocked ? undefined : handleBarcodeScanned}
+        onBarcodeScanned={scanLocked || scanError ? undefined : handleBarcodeScanned}
         style={StyleSheet.absoluteFill}
       />
 
@@ -192,12 +215,26 @@ export default function QRPairingScreen({ navigation, route }) {
           </Pressable>
           <View style={styles.topCopy}>
             <Text style={styles.topTitle}>Pair Desktop</Text>
-            <Text style={styles.topSubtitle}>Cloud relay QR</Text>
+            <Text style={styles.topSubtitle}>
+              {cloudConnected ? 'Cloud relay online' : 'Scan works before connection'}
+            </Text>
           </View>
           <View style={styles.scannerStatus}>
-            <View style={styles.scannerStatusDot} />
-            <Text style={styles.scannerStatusText}>Live</Text>
+            <View style={[
+              styles.scannerStatusDot,
+              pairing ? styles.scannerStatusDotBusy : scanError ? styles.scannerStatusDotPaused : styles.scannerStatusDotReady,
+            ]} />
+            <Text style={styles.scannerStatusText}>{scannerStateLabel}</Text>
           </View>
+        </View>
+
+        <View style={styles.connectionBanner}>
+          <Ionicons color={colors.text} name={cloudConnected ? 'cloud-done-outline' : 'cloud-offline-outline'} size={18} />
+          <Text style={styles.connectionBannerText}>
+            {cloudConnected
+              ? 'Connected. Scan a new QR only when pairing another Desktop.'
+              : 'Disconnected is okay. Scan the Desktop QR and OpenX will reconnect using it.'}
+          </Text>
         </View>
 
         <View style={styles.scanArea}>
@@ -222,7 +259,7 @@ export default function QRPairingScreen({ navigation, route }) {
             <View style={[styles.corner, styles.topRight]} />
             <View style={[styles.corner, styles.bottomLeft]} />
             <View style={[styles.corner, styles.bottomRight]} />
-            {!pairing && (
+            {!pairing && !scanError && (
               <Animated.View
                 style={[
                   styles.scanLine,
@@ -239,6 +276,24 @@ export default function QRPairingScreen({ navigation, route }) {
                 ]}
               />
             )}
+            {scanError ? (
+              <View style={styles.scanErrorOverlay}>
+                <View style={styles.scanErrorIcon}>
+                  <Ionicons color={colors.warning} name="alert-circle-outline" size={30} />
+                </View>
+                <Text style={styles.scanErrorTitle}>QR not accepted</Text>
+                <Text style={styles.scanErrorText}>{scanError}</Text>
+                <Pressable
+                  accessibilityLabel="Scan again"
+                  accessibilityRole="button"
+                  onPress={resetScanner}
+                  style={({ pressed }) => [styles.scanAgainButton, pressed && styles.pressed]}
+                >
+                  <Ionicons color={colors.background} name="scan-outline" size={18} />
+                  <Text style={styles.scanAgainText}>Scan again</Text>
+                </Pressable>
+              </View>
+            ) : null}
             {pairing && (
               <View style={styles.pairingOverlay}>
                 <ActivityIndicator color={colors.white} size="large" />
@@ -253,10 +308,15 @@ export default function QRPairingScreen({ navigation, route }) {
             <Ionicons color={colors.text} name="desktop-outline" size={20} />
           </View>
           <View style={styles.hintCopy}>
-            <Text style={styles.hintTitle}>Open desktop settings</Text>
+            <Text style={styles.hintTitle}>{paired ? 'Refresh pairing' : 'Desktop QR first'}</Text>
             <Text style={styles.hintText}>
-              Go to Mobile pairing and keep the QR inside this frame.
+              Open OpenX Desktop, generate the Mobile QR, then keep it inside this frame.
             </Text>
+            <View style={styles.stepRow}>
+              <Text style={styles.stepChip}>1 Desktop</Text>
+              <Text style={styles.stepChip}>2 Generate QR</Text>
+              <Text style={styles.stepChip}>3 Scan</Text>
+            </View>
           </View>
         </View>
 
@@ -312,6 +372,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   permissionButton: { alignSelf: 'stretch', marginTop: spacing.md },
+  permissionLink: {
+    alignItems: 'center',
+    borderRadius: radius.round,
+    justifyContent: 'center',
+    marginTop: spacing.md,
+    minHeight: 44,
+    paddingHorizontal: spacing.lg,
+  },
+  permissionLinkText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   scrim: {
     alignItems: 'center',
     backgroundColor: 'rgba(3, 6, 14, 0.52)',
@@ -364,15 +437,43 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   scannerStatusDot: {
-    backgroundColor: colors.success,
     borderRadius: radius.round,
     height: 7,
     width: 7,
+  },
+  scannerStatusDotReady: {
+    backgroundColor: colors.success,
+  },
+  scannerStatusDotBusy: {
+    backgroundColor: colors.blue,
+  },
+  scannerStatusDotPaused: {
+    backgroundColor: colors.warning,
   },
   scannerStatusText: {
     color: colors.white,
     fontSize: 11,
     fontWeight: '900',
+  },
+  connectionBanner: {
+    ...shadows.card,
+    alignItems: 'center',
+    backgroundColor: 'rgba(10, 12, 18, 0.68)',
+    borderColor: 'rgba(255,255,255,0.18)',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    width: '100%',
+  },
+  connectionBannerText: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
   },
   scanArea: {
     alignItems: 'center',
@@ -457,6 +558,58 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: spacing.md,
   },
+  scanErrorOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(7, 11, 20, 0.92)',
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    padding: spacing.lg,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  scanErrorIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(246, 185, 74, 0.12)',
+    borderColor: 'rgba(246, 185, 74, 0.34)',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    height: 58,
+    justifyContent: 'center',
+    width: 58,
+  },
+  scanErrorTitle: {
+    color: colors.white,
+    fontSize: 17,
+    fontWeight: '900',
+    marginTop: spacing.md,
+  },
+  scanErrorText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+    marginTop: spacing.xs,
+    textAlign: 'center',
+  },
+  scanAgainButton: {
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderRadius: radius.round,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'center',
+    marginTop: spacing.lg,
+    minHeight: 48,
+    minWidth: 148,
+    paddingHorizontal: spacing.lg,
+  },
+  scanAgainText: {
+    color: colors.background,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   hintCard: {
     ...shadows.card,
     alignItems: 'center',
@@ -494,5 +647,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 17,
     marginTop: 3,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  stepChip: {
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(255,255,255,0.16)',
+    borderRadius: radius.round,
+    borderWidth: 1,
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '900',
+    overflow: 'hidden',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
   },
 });
