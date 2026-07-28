@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -33,8 +34,64 @@ const ACTION_LABELS = Object.freeze({
   fullscreen: 'Full',
 });
 
+const SHORTCUT_ACTIONS = Object.freeze(['back', 'playPause', 'fullscreen']);
+const DIRECTION_ACTIONS = Object.freeze(['up', 'left', 'center', 'right', 'down']);
+
+const TARGET_ICONS = Object.freeze({
+  youtube: 'logo-youtube',
+  powerpoint: 'easel-outline',
+  instagram: 'logo-instagram',
+  spotify: 'musical-notes-outline',
+});
+
+const TARGET_ACTIONS = Object.freeze({
+  youtube: new Set([...DIRECTION_ACTIONS, ...SHORTCUT_ACTIONS]),
+  powerpoint: new Set([...DIRECTION_ACTIONS, ...SHORTCUT_ACTIONS]),
+  instagram: new Set([...DIRECTION_ACTIONS, 'back']),
+  spotify: new Set([...DIRECTION_ACTIONS, 'back', 'playPause']),
+});
+
 function targetKey(target) {
   return `${target?.id || ''}:${target?.tabTitle || target?.windowTitle || target?.processName || ''}`;
+}
+
+function normalizeRemoteTarget(target) {
+  if (!target || typeof target !== 'object') return null;
+  const key = targetKey(target);
+  if (!key.replace(':', '').trim()) return null;
+  return {
+    ...target,
+    id: String(target.id || target.processName || 'remote').trim(),
+    label: String(target.label || target.tabTitle || target.windowTitle || target.processName || 'Remote app').trim(),
+  };
+}
+
+function targetIconName(target) {
+  const id = String(target?.id || '').toLowerCase();
+  if (TARGET_ICONS[id]) return TARGET_ICONS[id];
+  if (target?.kind === 'presentation') return 'easel-outline';
+  if (target?.kind === 'media') return 'play-circle-outline';
+  return 'tv-outline';
+}
+
+function isActionSupported(target, action) {
+  const id = String(target?.id || '').toLowerCase();
+  return !TARGET_ACTIONS[id] || TARGET_ACTIONS[id].has(action);
+}
+
+function statusTone({ connected, hasTargets, busy }) {
+  if (busy) return 'info';
+  if (!connected || !hasTargets) return 'warning';
+  return 'ready';
+}
+
+function friendlyRemoteStatus({ connected, busy, selectedTarget, remoteControlStatus }) {
+  if (!connected) return 'Connect to OpenX Desktop to use this remote.';
+  if (busy) return 'Finding active apps on your desktop...';
+  const explicit = String(remoteControlStatus || '').trim();
+  if (explicit) return explicit;
+  if (!selectedTarget) return 'Open a supported desktop app, then scan.';
+  return `${selectedTarget.label || 'App'} is ready.`;
 }
 
 function RemotePadButton({ action, disabled, onPress, style, size = 58 }) {
@@ -62,21 +119,31 @@ function RemotePadButton({ action, disabled, onPress, style, size = 58 }) {
   );
 }
 
-function RemoteActionPill({ action, disabled, onPress }) {
+function RemoteActionPill({ action, disabled, onPress, unsupported }) {
   return (
     <Pressable
-      accessibilityLabel={`Remote ${ACTION_LABELS[action] || action}`}
+      accessibilityLabel={`Remote ${ACTION_LABELS[action] || action}${unsupported ? ' unavailable for this app' : ''}`}
       accessibilityRole="button"
       disabled={disabled}
       onPress={() => onPress?.(action)}
       style={({ pressed }) => [
         styles.actionPill,
+        unsupported && styles.actionPillUnsupported,
         pressed && styles.pressed,
         disabled && styles.disabled,
       ]}
     >
-      <Ionicons color={colors.text} name={CONTROL_ICONS[action] || 'ellipse'} size={18} />
-      <Text style={styles.actionPillText}>{ACTION_LABELS[action] || action}</Text>
+      <Ionicons
+        color={unsupported ? colors.textMuted : colors.text}
+        name={unsupported ? 'remove-circle-outline' : CONTROL_ICONS[action] || 'ellipse'}
+        size={18}
+      />
+      <Text
+        numberOfLines={1}
+        style={[styles.actionPillText, unsupported && styles.actionPillTextUnsupported]}
+      >
+        {ACTION_LABELS[action] || action}
+      </Text>
     </Pressable>
   );
 }
@@ -95,25 +162,30 @@ export default function MobileRemotePanel({
 }) {
   const [selectedKey, setSelectedKey] = useState('');
   const connected = paired && cloudStatus?.connected;
+  const safeRemoteTargets = useMemo(() => (
+    (Array.isArray(remoteTargets) ? remoteTargets : [])
+      .map(normalizeRemoteTarget)
+      .filter(Boolean)
+  ), [remoteTargets]);
 
   const selectedTarget = useMemo(() => (
-    remoteTargets.find((target) => targetKey(target) === selectedKey) || remoteTargets[0] || null
-  ), [remoteTargets, selectedKey]);
+    safeRemoteTargets.find((target) => targetKey(target) === selectedKey) || safeRemoteTargets[0] || null
+  ), [safeRemoteTargets, selectedKey]);
 
   useEffect(() => {
-    if (!remoteTargets.length) {
+    if (!safeRemoteTargets.length) {
       setSelectedKey('');
       return;
     }
-    if (!remoteTargets.some((target) => targetKey(target) === selectedKey)) {
-      setSelectedKey(targetKey(remoteTargets[0]));
+    if (!safeRemoteTargets.some((target) => targetKey(target) === selectedKey)) {
+      setSelectedKey(targetKey(safeRemoteTargets[0]));
     }
-  }, [remoteTargets, selectedKey]);
+  }, [safeRemoteTargets, selectedKey]);
 
   useEffect(() => {
-    if (!connected || remoteTargets.length || remoteControlBusy) return;
+    if (!connected || safeRemoteTargets.length || remoteControlBusy) return;
     refreshRemoteTargets?.();
-  }, [connected, refreshRemoteTargets, remoteControlBusy, remoteTargets.length]);
+  }, [connected, refreshRemoteTargets, remoteControlBusy, safeRemoteTargets.length]);
 
   const handleRefresh = useCallback(() => {
     if (!connected) {
@@ -155,11 +227,16 @@ export default function MobileRemotePanel({
     });
   }, [connected, selectedTarget, sendRemoteControl, showNotice]);
 
-  const disabled = !connected || !selectedTarget || remoteControlBusy;
+  const isControlDisabled = useCallback((action) => (
+    !connected || !selectedTarget || remoteControlBusy || !isActionSupported(selectedTarget, action)
+  ), [connected, remoteControlBusy, selectedTarget]);
   const activeTitle = selectedTarget?.tabTitle || selectedTarget?.windowTitle || selectedTarget?.label || 'No active app';
+  const tone = statusTone({ connected, hasTargets: safeRemoteTargets.length > 0, busy: remoteControlBusy });
+  const statusIcon = tone === 'ready' ? 'checkmark-circle' : tone === 'info' ? 'sync-outline' : 'alert-circle-outline';
+  const statusMessage = friendlyRemoteStatus({ connected, busy: remoteControlBusy, selectedTarget, remoteControlStatus });
 
   return (
-    <View style={[styles.container, { paddingBottom, paddingTop }]}>
+    <View style={[styles.container, { paddingBottom: bottomPadding, paddingTop: topPadding }]}>
       <View style={styles.headerRow}>
         <View style={styles.headerCopy}>
           <Text style={styles.title}>Remote</Text>
@@ -178,73 +255,162 @@ export default function MobileRemotePanel({
             remoteControlBusy && styles.disabled,
           ]}
         >
-          <Ionicons color={colors.text} name="refresh" size={21} />
+          {remoteControlBusy ? (
+            <ActivityIndicator color={colors.text} size="small" />
+          ) : (
+            <Ionicons color={colors.text} name="refresh" size={21} />
+          )}
         </Pressable>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.targetRow}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-      >
-        {remoteTargets.length ? remoteTargets.map((target) => {
-          const key = targetKey(target);
-          const selected = selectedTarget && key === targetKey(selectedTarget);
-          return (
+      <LinearGradient colors={gradients.glassSoft} style={styles.targetPanel}>
+        <View style={styles.targetPanelHeader}>
+          <View style={styles.targetPanelCopy}>
+            <Text style={styles.sectionLabel}>Active app</Text>
+            <Text numberOfLines={1} style={styles.sectionHint}>
+              Apps appear here only when they are open on Desktop.
+            </Text>
+          </View>
+          <Text style={styles.targetCount}>{safeRemoteTargets.length}</Text>
+        </View>
+
+        <ScrollView
+          contentContainerStyle={styles.targetRow}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+        >
+          {safeRemoteTargets.length ? safeRemoteTargets.map((target) => {
+            const key = targetKey(target);
+            const selected = selectedTarget && key === targetKey(selectedTarget);
+            return (
+              <Pressable
+                accessibilityLabel={`Select ${target.label}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                key={key}
+                onPress={() => setSelectedKey(key)}
+                style={({ pressed }) => [
+                  styles.targetChip,
+                  selected && styles.targetChipActive,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Ionicons
+                  color={selected ? colors.background : colors.text}
+                  name={targetIconName(target)}
+                  size={19}
+                />
+                <View style={styles.targetChipCopy}>
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.targetChipText, selected && styles.targetChipTextActive]}
+                  >
+                    {target.label}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.targetChipMeta, selected && styles.targetChipMetaActive]}
+                  >
+                    {target.kind || target.processName || 'remote'}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          }) : (
             <Pressable
-              accessibilityLabel={`Select ${target.label}`}
+              accessibilityLabel="Scan active desktop apps"
               accessibilityRole="button"
-              accessibilityState={{ selected }}
-              key={key}
-              onPress={() => setSelectedKey(key)}
+              disabled={!connected || remoteControlBusy}
+              onPress={handleRefresh}
               style={({ pressed }) => [
-                styles.targetChip,
-                selected && styles.targetChipActive,
+                styles.emptyChip,
                 pressed && styles.pressed,
+                (!connected || remoteControlBusy) && styles.disabled,
               ]}
             >
-              <Ionicons
-                color={selected ? colors.background : colors.text}
-                name={target.id === 'powerpoint' ? 'easel-outline' : target.id === 'youtube' ? 'logo-youtube' : 'tv-outline'}
-                size={17}
-              />
-              <Text numberOfLines={1} style={[styles.targetChipText, selected && styles.targetChipTextActive]}>
-                {target.label}
-              </Text>
+              <Ionicons color={colors.textSecondary} name="tv-outline" size={18} />
+              <Text style={styles.emptyChipText}>{connected ? 'Scan active apps' : 'Desktop not connected'}</Text>
             </Pressable>
-          );
-        }) : (
-          <View style={styles.emptyChip}>
-            <Ionicons color={colors.textSecondary} name="tv-outline" size={18} />
-            <Text style={styles.emptyChipText}>No active remote apps</Text>
-          </View>
-        )}
-      </ScrollView>
+          )}
+        </ScrollView>
+      </LinearGradient>
 
       <View style={styles.stage}>
+        <View style={styles.stageLabel}>
+          <Ionicons
+            color={colors.textSecondary}
+            name={selectedTarget ? targetIconName(selectedTarget) : 'phone-portrait-outline'}
+            size={18}
+          />
+          <Text numberOfLines={1} style={styles.stageLabelText}>
+            {selectedTarget?.label || 'Choose an app'}
+          </Text>
+        </View>
         <LinearGradient
           colors={gradients.glassSoft}
           end={{ x: 1, y: 1 }}
           start={{ x: 0, y: 0 }}
           style={styles.remoteDisc}
         >
-          <RemotePadButton action="up" disabled={disabled} onPress={handleRemoteAction} style={styles.padUp} />
-          <RemotePadButton action="left" disabled={disabled} onPress={handleRemoteAction} style={styles.padLeft} />
-          <RemotePadButton action="center" disabled={disabled} onPress={handleRemoteAction} size={68} style={styles.padCenter} />
-          <RemotePadButton action="right" disabled={disabled} onPress={handleRemoteAction} style={styles.padRight} />
-          <RemotePadButton action="down" disabled={disabled} onPress={handleRemoteAction} style={styles.padDown} />
+          <RemotePadButton
+            action="up"
+            disabled={isControlDisabled('up')}
+            onPress={handleRemoteAction}
+            style={styles.padUp}
+          />
+          <RemotePadButton
+            action="left"
+            disabled={isControlDisabled('left')}
+            onPress={handleRemoteAction}
+            style={styles.padLeft}
+          />
+          <RemotePadButton
+            action="center"
+            disabled={isControlDisabled('center')}
+            onPress={handleRemoteAction}
+            size={72}
+            style={styles.padCenter}
+          />
+          <RemotePadButton
+            action="right"
+            disabled={isControlDisabled('right')}
+            onPress={handleRemoteAction}
+            style={styles.padRight}
+          />
+          <RemotePadButton
+            action="down"
+            disabled={isControlDisabled('down')}
+            onPress={handleRemoteAction}
+            style={styles.padDown}
+          />
         </LinearGradient>
       </View>
 
       <View style={styles.actions}>
-        <RemoteActionPill action="back" disabled={disabled} onPress={handleRemoteAction} />
-        <RemoteActionPill action="playPause" disabled={disabled} onPress={handleRemoteAction} />
-        <RemoteActionPill action="fullscreen" disabled={disabled} onPress={handleRemoteAction} />
+        {SHORTCUT_ACTIONS.map((action) => {
+          const unsupported = selectedTarget ? !isActionSupported(selectedTarget, action) : false;
+          return (
+            <RemoteActionPill
+              action={action}
+              disabled={isControlDisabled(action)}
+              key={action}
+              onPress={handleRemoteAction}
+              unsupported={unsupported}
+            />
+          );
+        })}
       </View>
 
-      <Text numberOfLines={2} style={styles.status}>
-        {remoteControlStatus || 'Only active desktop apps appear here.'}
-      </Text>
+      <View style={[styles.statusCard, styles[`status_${tone}`]]}>
+        <Ionicons
+          color={tone === 'ready' ? colors.success : tone === 'info' ? colors.textSecondary : colors.warning}
+          name={statusIcon}
+          size={17}
+        />
+        <Text numberOfLines={2} style={styles.status}>
+          {statusMessage}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -266,7 +432,7 @@ const styles = StyleSheet.create({
   },
   title: {
     color: colors.text,
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: '900',
     letterSpacing: 0,
   },
@@ -290,8 +456,53 @@ const styles = StyleSheet.create({
   targetRow: {
     alignItems: 'center',
     gap: spacing.sm,
-    minHeight: 48,
-    paddingBottom: spacing.lg,
+    minHeight: 56,
+    paddingTop: spacing.sm,
+  },
+  targetPanel: {
+    ...shadows.card,
+    borderColor: colors.border,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    overflow: 'hidden',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  targetPanelHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  targetPanelCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sectionLabel: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  sectionHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  targetCount: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '900',
+    minWidth: 34,
+    overflow: 'hidden',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    textAlign: 'center',
   },
   targetChip: {
     alignItems: 'center',
@@ -301,8 +512,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 38,
-    maxWidth: 168,
+    height: 54,
+    maxWidth: 188,
+    minWidth: 132,
     paddingHorizontal: spacing.md,
   },
   targetChipActive: {
@@ -313,10 +525,23 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     fontWeight: '900',
-    maxWidth: 112,
+  },
+  targetChipCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  targetChipMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 1,
+    textTransform: 'uppercase',
   },
   targetChipTextActive: {
     color: colors.background,
+  },
+  targetChipMetaActive: {
+    color: 'rgba(3, 5, 10, 0.62)',
   },
   emptyChip: {
     alignItems: 'center',
@@ -326,7 +551,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 38,
+    height: 52,
     paddingHorizontal: spacing.md,
   },
   emptyChipText: {
@@ -338,7 +563,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
     justifyContent: 'center',
-    minHeight: 260,
+    minHeight: 258,
+    paddingVertical: spacing.lg,
+  },
+  stageLabel: {
+    alignItems: 'center',
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+    maxWidth: '88%',
+    minHeight: 38,
+    paddingHorizontal: spacing.md,
+  },
+  stageLabelText: {
+    color: colors.textSecondary,
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: '900',
   },
   remoteDisc: {
     ...shadows.floating,
@@ -376,8 +621,8 @@ const styles = StyleSheet.create({
   },
   padCenter: {
     backgroundColor: colors.primary,
-    left: 88,
-    top: 88,
+    left: 86,
+    top: 86,
   },
   centerLabel: {
     color: colors.background,
@@ -399,23 +644,52 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     flexDirection: 'row',
     gap: spacing.xs,
-    height: 42,
+    height: 48,
     justifyContent: 'center',
-    minWidth: 90,
+    minWidth: 96,
     paddingHorizontal: spacing.md,
+  },
+  actionPillUnsupported: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
   },
   actionPillText: {
     color: colors.text,
     fontSize: 13,
     fontWeight: '900',
   },
+  actionPillTextUnsupported: {
+    color: colors.textMuted,
+  },
   status: {
-    color: colors.textSecondary,
+    color: colors.text,
     fontSize: 13,
     fontWeight: '800',
+    flex: 1,
     lineHeight: 18,
-    minHeight: 38,
-    textAlign: 'center',
+  },
+  statusCard: {
+    alignItems: 'center',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    minHeight: 50,
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  status_ready: {
+    backgroundColor: 'rgba(70, 217, 145, 0.12)',
+    borderColor: 'rgba(70, 217, 145, 0.22)',
+  },
+  status_info: {
+    backgroundColor: colors.glassSubtle,
+    borderColor: colors.border,
+  },
+  status_warning: {
+    backgroundColor: 'rgba(246, 185, 74, 0.12)',
+    borderColor: 'rgba(246, 185, 74, 0.22)',
   },
   pressed: {
     opacity: 0.84,
