@@ -30,7 +30,7 @@ import {
   isImageTransferFile,
   pickTransferFile,
 } from '../services/fileTransfer';
-import { parseMobileScheduleCommand } from '../services/mobileScheduleIntelligence';
+import { routeMobileCommand } from '../services/mobileCommandRouter';
 import { colors, gradients, radius, shadows, spacing } from '../styles/theme';
 
 const WORKSPACE_OPTIONS = [
@@ -242,7 +242,10 @@ export default function HomeScreen({ navigation }) {
               ? 'Session expired. Reconnect with QR.'
               : null;
 
-  const localScheduleCommand = useMemo(() => parseMobileScheduleCommand(text), [text]);
+  const localScheduleCommand = useMemo(
+    () => routeMobileCommand(text).route === 'local-schedule',
+    [text],
+  );
   const canSendText = text.trim().length > 0 && !sendingCommand && (!commandRestriction || Boolean(localScheduleCommand));
   const canSendFile = connectionMode === 'cloud'
     ? paired && cloudStatus?.connected

@@ -26,9 +26,8 @@ import {
 import {
   formatScheduleDue,
   nextScheduleDueForRecurrence,
-  parseMobileScheduleCommand,
 } from '../services/mobileScheduleIntelligence';
-import { mobileLlmManager } from '../services/MobileLlmManager';
+import { routeMobileCommand } from '../services/mobileCommandRouter';
 import {
   EMPTY_SESSION,
   clearPersistedSession,
@@ -1638,16 +1637,8 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timer);
   }, [cancelLocalScheduleNotification, markScheduleDirty, presentScheduleDueNotification, scheduleItems, schedulesLoaded, sendCloudScheduleSync]);
 
-  const handleLocalScheduleCommand = useCallback(async (normalizedText, options = {}) => {
-    let parsed = parseMobileScheduleCommand(normalizedText);
+  const handleLocalScheduleCommand = useCallback(async (normalizedText, parsed, options = {}) => {
     if (!parsed) return false;
-    try {
-      const interpreted = await mobileLlmManager.interpretSchedule(normalizedText, parsed);
-      if (interpreted === false) console.warn('On-device LLM schedule interpretation disagreed with the trusted schedule; using the trusted schedule.');
-      else if (interpreted) parsed = interpreted;
-    } catch (error) {
-      console.warn('On-device LLM schedule interpretation unavailable; using the trusted schedule.', error.message);
-    }
     const now = new Date().toISOString();
     const schedule = normalizeScheduleItem({
       ...parsed,
@@ -1701,7 +1692,8 @@ export function AppProvider({ children }) {
       const cloudDesktopReady = settingsRef.current.connectionMode === 'cloud' &&
         relayClient.isConnected() && pairingDataRef.current.paired && cloudPairing.ownerId &&
         cloudPairing.desktopDeviceId && pairingDataRef.current.deviceId;
-      if (await handleLocalScheduleCommand(normalizedText, {
+      const commandRoute = routeMobileCommand(normalizedText);
+      if (commandRoute.route === 'local-schedule' && await handleLocalScheduleCommand(normalizedText, commandRoute.schedule, {
         syncNow: Boolean(cloudDesktopReady),
         offlineFallback: !cloudDesktopReady,
       })) return true;

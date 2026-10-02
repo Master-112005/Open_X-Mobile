@@ -9,6 +9,21 @@ function loadScheduleIntelligence() {
   return new Function(`${source}; return { parseMobileScheduleCommand, nextScheduleDueForRecurrence };`)();
 }
 
+function loadMobileCommandRouter() {
+  const routerPath = path.resolve(__dirname, '..', 'src', 'services', 'mobileCommandRouter.js');
+  const source = fs.readFileSync(routerPath, 'utf8')
+    .replace(/^import \{ parseIntentPhrase, splitCommandClauses \} from '\.\/desktopLanguageAnalysis';\s*$/m, '')
+    .replace(/^import \{ parseMobileScheduleCommand \} from '\.\/mobileScheduleIntelligence';\s*$/m, '')
+    .replace('export function routeMobileCommand', 'function routeMobileCommand');
+  const { parseMobileScheduleCommand } = loadScheduleIntelligence();
+  const { parseIntentPhrase, splitCommandClauses } = require('../src/services/desktopLanguageAnalysis');
+  return new Function('parseIntentPhrase', 'splitCommandClauses', 'parseMobileScheduleCommand', `${source}; return routeMobileCommand;`)(
+    parseIntentPhrase,
+    splitCommandClauses,
+    parseMobileScheduleCommand,
+  );
+}
+
 test('mobile NLP parses weekly multi-day reminder commands', () => {
   const { parseMobileScheduleCommand } = loadScheduleIntelligence();
   const now = new Date('2026-07-13T12:00:00+05:30').getTime();
@@ -108,6 +123,36 @@ test('mobile NLP classifies plural alarm wording', () => {
 
   assert.equal(alarm.kind, 'Alarm');
   assert.equal(alarm.recurrence, 'daily');
+});
+
+test('mobile NLP independently parses relative reminders and timers', () => {
+  const { parseMobileScheduleCommand } = loadScheduleIntelligence();
+  const now = new Date('2026-07-20T08:00:00+05:30').getTime();
+  const reminder = parseMobileScheduleCommand('remind me in one minute to drink water', now);
+  const timer = parseMobileScheduleCommand('set a timer for 5 minutes', now);
+
+  assert.equal(reminder.kind, 'Reminder');
+  assert.equal(reminder.message, 'drink water');
+  assert.equal(reminder.dueAt, '2026-07-20T02:31:00.000Z');
+  assert.equal(reminder.source, 'mobile');
+  assert.equal(timer.kind, 'Timer');
+  assert.equal(timer.dueAt, '2026-07-20T02:35:00.000Z');
+});
+
+test('mobile router uses Desktop clause analysis and keeps mixed actions on Desktop', () => {
+  const routeMobileCommand = loadMobileCommandRouter();
+  const now = new Date('2026-07-20T08:00:00+05:30').getTime();
+
+  const local = routeMobileCommand('remind me in one minute to drink water', now);
+  const mixed = routeMobileCommand('remind me in one minute to drink water and open YouTube', now);
+  const desktop = routeMobileCommand('open YouTube', now);
+
+  assert.equal(local.route, 'local-schedule');
+  assert.equal(local.intentPhrase.domain, 'schedule');
+  assert.equal(mixed.route, 'desktop');
+  assert.equal(mixed.clauses.length, 2);
+  assert.equal(desktop.route, 'desktop');
+  assert.equal(desktop.intentPhrase.domain, 'media');
 });
 
 test('mobile recurrence advances past the previous due time', () => {

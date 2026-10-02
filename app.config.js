@@ -31,7 +31,6 @@ module.exports = {
       ],
       'expo-font',
       'expo-notifications',
-      ['llama.rn', { enableEntitlements: false, enableOpenCLAndHexagon: false }],
       'expo-secure-store',
       'expo-sharing'
     ],

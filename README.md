@@ -72,4 +72,4 @@ The sender keeps one base64 source and slices only the current chunk instead of 
 
 ## On-device alarms and reminders
 
-Import the `Llama-3.2-1B-Instruct-Q4_K_M.gguf` file from Settings > System > On-device LLM. The model interprets alarm, reminder, and timer requests locally before the phone saves and schedules them. Its JSON must exactly match the phone's trusted date/time parse; otherwise the phone keeps the trusted result. The model is stored in app-private files and selected separately so the roughly 808 MB model does not inflate the app download. Build with Expo's native development or production build because the model runtime is native.
+OpenX Mobile parses alarms, reminders, and timers locally using its built-in NLP, then saves them and schedules phone notifications. This works without a Desktop connection; pending schedule changes sync when the phone reconnects to its paired Desktop.
