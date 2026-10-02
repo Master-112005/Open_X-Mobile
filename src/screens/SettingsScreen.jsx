@@ -17,6 +17,7 @@ import GlassPanel from '../components/GlassPanel';
 import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
 import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
+import { mobileLlmManager } from '../services/MobileLlmManager';
 import { colors, radius, spacing } from '../styles/theme';
 
 const PERMISSION_ITEMS = [
@@ -113,6 +114,8 @@ export default function SettingsScreen({ navigation }) {
   } = useApp();
   const [phoneName, setPhoneName] = useState(deviceName);
   const [savingName, setSavingName] = useState(false);
+  const [modelReady, setModelReady] = useState(false);
+  const [selectingModel, setSelectingModel] = useState(false);
   const insets = useSafeAreaInsets();
   const bottomDockHeight = getMobileBottomDockHeight(insets);
   const isCloud = connectionMode === 'cloud';
@@ -133,6 +136,25 @@ export default function SettingsScreen({ navigation }) {
   useEffect(() => {
     setPhoneName(deviceName);
   }, [deviceName]);
+
+  useEffect(() => {
+    mobileLlmManager.getModelPath().then((modelPath) => setModelReady(Boolean(modelPath))).catch(() => {});
+  }, []);
+
+  const handleSelectModel = async () => {
+    setSelectingModel(true);
+    try {
+      const selected = await mobileLlmManager.selectModel();
+      if (selected) {
+        setModelReady(true);
+        showNotice({ title: 'On-device model ready', message: 'OpenX will use this model to interpret alarms, reminders, and timers on this phone.', tone: 'success' });
+      }
+    } catch (error) {
+      showNotice({ title: 'Unable to load model', message: error.message || 'Choose a valid GGUF file.', tone: 'error' });
+    } finally {
+      setSelectingModel(false);
+    }
+  };
 
   const handleSaveDeviceName = async () => {
     const normalizedName = phoneName.replace(/\s+/g, ' ').trim();
@@ -236,23 +258,32 @@ export default function SettingsScreen({ navigation }) {
             />
             {sectionDivider(4)}
             <SettingRow
+              connected={modelReady}
+              disabled={selectingModel}
+              iconName="hardware-chip-outline"
+              label={selectingModel ? 'Importing on-device model' : 'On-device LLM'}
+              onPress={handleSelectModel}
+              status={modelReady ? 'Ready' : 'Choose GGUF model'}
+            />
+            {sectionDivider(5)}
+            <SettingRow
               iconName="calendar-outline"
               label="Calendar"
               onPress={() => navigation.navigate('Calendar')}
               status={`${scheduleCount} saved`}
             />
-            {sectionDivider(5)}
+            {sectionDivider(6)}
             <SettingRow
               iconName="folder-open-outline"
               label="Files"
               onPress={() => navigation.navigate('Transfers')}
               status={`${receivedCount} received`}
             />
-            {sectionDivider(6)}
+            {sectionDivider(7)}
             {permissionsLoaded ? (
               PERMISSION_ITEMS.map((item, index) => (
                 <View key={item.key}>
-                  {sectionDivider(index + 7)}
+                  {sectionDivider(index + 8)}
                   <SettingRow
                     connected={permissions?.[item.key] === true}
                     iconName={item.iconName}

@@ -28,6 +28,7 @@ import {
   nextScheduleDueForRecurrence,
   parseMobileScheduleCommand,
 } from '../services/mobileScheduleIntelligence';
+import { mobileLlmManager } from '../services/MobileLlmManager';
 import {
   EMPTY_SESSION,
   clearPersistedSession,
@@ -1637,9 +1638,16 @@ export function AppProvider({ children }) {
     return () => clearTimeout(timer);
   }, [cancelLocalScheduleNotification, markScheduleDirty, presentScheduleDueNotification, scheduleItems, schedulesLoaded, sendCloudScheduleSync]);
 
-  const handleLocalScheduleCommand = useCallback((normalizedText, options = {}) => {
-    const parsed = parseMobileScheduleCommand(normalizedText);
+  const handleLocalScheduleCommand = useCallback(async (normalizedText, options = {}) => {
+    let parsed = parseMobileScheduleCommand(normalizedText);
     if (!parsed) return false;
+    try {
+      const interpreted = await mobileLlmManager.interpretSchedule(normalizedText, parsed);
+      if (interpreted === false) console.warn('On-device LLM schedule interpretation disagreed with the trusted schedule; using the trusted schedule.');
+      else if (interpreted) parsed = interpreted;
+    } catch (error) {
+      console.warn('On-device LLM schedule interpretation unavailable; using the trusted schedule.', error.message);
+    }
     const now = new Date().toISOString();
     const schedule = normalizeScheduleItem({
       ...parsed,
@@ -1686,20 +1694,21 @@ export function AppProvider({ children }) {
   }, [markScheduleDirty, scheduleLocalScheduleNotification, sendCloudScheduleSync]);
 
   const sendMessage = useCallback(
-    (text) => {
+    async (text) => {
       const normalizedText = text.trim();
       if (!normalizedText) return false;
+      const cloudPairing = pairingDataRef.current.cloudPairing || {};
+      const cloudDesktopReady = settingsRef.current.connectionMode === 'cloud' &&
+        relayClient.isConnected() && pairingDataRef.current.paired && cloudPairing.ownerId &&
+        cloudPairing.desktopDeviceId && pairingDataRef.current.deviceId;
+      if (await handleLocalScheduleCommand(normalizedText, {
+        syncNow: Boolean(cloudDesktopReady),
+        offlineFallback: !cloudDesktopReady,
+      })) return true;
       if (settingsRef.current.connectionMode === 'cloud') {
-        const cloudPairing = pairingDataRef.current.cloudPairing || {};
         const requestId = Crypto.randomUUID();
         const packetId = `cloud_command_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-        const cloudDesktopReady = relayClient.isConnected() &&
-          pairingDataRef.current.paired &&
-          cloudPairing.ownerId &&
-          cloudPairing.desktopDeviceId &&
-          pairingDataRef.current.deviceId;
         if (!cloudDesktopReady) {
-          if (handleLocalScheduleCommand(normalizedText, { offlineFallback: true })) return true;
           setMessages((current) => [
             ...current,
             createMessage('user', normalizedText),
@@ -1765,7 +1774,6 @@ export function AppProvider({ children }) {
         paired &&
         permissionsRef.current.remoteCommands;
       if (!localDesktopReady) {
-        if (handleLocalScheduleCommand(normalizedText, { offlineFallback: true })) return true;
         return false;
       }
 

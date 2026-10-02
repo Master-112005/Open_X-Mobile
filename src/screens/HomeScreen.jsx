@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   FlatList,
@@ -210,6 +211,7 @@ export default function HomeScreen({ navigation }) {
   const [imagePreview, setImagePreview] = useState(null);
   const [selectingFile, setSelectingFile] = useState(false);
   const [sendingFile, setSendingFile] = useState(false);
+  const [sendingCommand, setSendingCommand] = useState(false);
   const [workspace, setWorkspace] = useState('assistant');
   const listRef = useRef(null);
   const scrollFrameRef = useRef(null);
@@ -241,7 +243,7 @@ export default function HomeScreen({ navigation }) {
               : null;
 
   const localScheduleCommand = useMemo(() => parseMobileScheduleCommand(text), [text]);
-  const canSendText = text.trim().length > 0 && (!commandRestriction || Boolean(localScheduleCommand));
+  const canSendText = text.trim().length > 0 && !sendingCommand && (!commandRestriction || Boolean(localScheduleCommand));
   const canSendFile = connectionMode === 'cloud'
     ? paired && cloudStatus?.connected
     : paired &&
@@ -274,6 +276,19 @@ export default function HomeScreen({ navigation }) {
       listRef.current?.scrollToEnd({ animated: true });
     });
   }, []);
+
+  const submitMessage = useCallback(async (value) => {
+    if (sendingCommand) return false;
+    setSendingCommand(true);
+    try {
+      return await sendMessage(value);
+    } catch (error) {
+      showNotice({ title: 'Unable to process command', message: error.message || 'Please try again.', tone: 'error' });
+      return false;
+    } finally {
+      setSendingCommand(false);
+    }
+  }, [sendMessage, sendingCommand, showNotice]);
 
   useEffect(() => () => {
     if (scrollFrameRef.current) {
@@ -314,14 +329,12 @@ export default function HomeScreen({ navigation }) {
     }
 
     if (!canSendText) return;
-    if (sendMessage(text)) setText('');
+    if (await submitMessage(text)) setText('');
   };
 
-  const handleChoice = useCallback((value) => {
-    if (!commandRestriction && sendMessage(value)) {
-      scrollToNewest();
-    }
-  }, [commandRestriction, scrollToNewest, sendMessage]);
+  const handleChoice = useCallback(async (value) => {
+    if (!commandRestriction && await submitMessage(value)) scrollToNewest();
+  }, [commandRestriction, scrollToNewest, submitMessage]);
 
   const renderMessage = useCallback(({ item }) => (
     <ChatBubble
@@ -481,7 +494,7 @@ export default function HomeScreen({ navigation }) {
                 )}
               </View>
               <Pressable
-                accessibilityLabel={selectedFile ? 'Send file' : 'Send message'}
+                accessibilityLabel={sendingCommand ? 'Planning command on device' : selectedFile ? 'Send file' : 'Send message'}
                 accessibilityRole="button"
                 disabled={selectedFile ? !canSendFile || sendingFile : !canSendText}
                 onPress={handleSend}
@@ -491,11 +504,9 @@ export default function HomeScreen({ navigation }) {
                   (selectedFile ? !canSendFile || sendingFile : !canSendText) && styles.disabled,
                 ]}
               >
-                <Ionicons
-                  color={colors.background}
-                  name={selectedFile ? 'cloud-upload-outline' : 'send'}
-                  size={20}
-                />
+                {sendingCommand
+                  ? <ActivityIndicator color={colors.background} size="small" />
+                  : <Ionicons color={colors.background} name={selectedFile ? 'cloud-upload-outline' : 'send'} size={20} />}
               </Pressable>
             </LinearGradient>
             <MobileBottomDock

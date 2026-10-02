@@ -69,3 +69,7 @@ The sender keeps one base64 source and slices only the current chunk instead of 
 - Reconnect loop: verify the relay uses `wss://`, the device has internet access, and the saved relay URL is correct.
 - File transfer failure: keep both devices connected, accept the incoming transfer, and ensure the destination has enough storage.
 - Legacy/local QR error: regenerate the QR from the Cloud pairing panel in OpenX Desktop.
+
+## On-device alarms and reminders
+
+Import the `Llama-3.2-1B-Instruct-Q4_K_M.gguf` file from Settings > System > On-device LLM. The model interprets alarm, reminder, and timer requests locally before the phone saves and schedules them. Its JSON must exactly match the phone's trusted date/time parse; otherwise the phone keeps the trusted result. The model is stored in app-private files and selected separately so the roughly 808 MB model does not inflate the app download. Build with Expo's native development or production build because the model runtime is native.

@@ -8,13 +8,15 @@ module.exports = {
     orientation: 'portrait',
     icon: './assets/logo.png',
     userInterfaceStyle: 'dark',
+    newArchEnabled: true,
 
     plugins: [
       [
         'expo-build-properties',
         {
           android: {
-            usesCleartextTraffic: false
+            usesCleartextTraffic: false,
+            buildArchs: ['arm64-v8a']
           }
         }
       ],
@@ -29,6 +31,7 @@ module.exports = {
       ],
       'expo-font',
       'expo-notifications',
+      ['llama.rn', { enableEntitlements: false, enableOpenCLAndHexagon: false }],
       'expo-secure-store',
       'expo-sharing'
     ],
@@ -43,7 +46,8 @@ module.exports = {
       predictiveBackGestureEnabled: false,
       permissions: [
         'android.permission.CAMERA',
-        'android.permission.POST_NOTIFICATIONS'
+        'android.permission.POST_NOTIFICATIONS',
+        'android.permission.SCHEDULE_EXACT_ALARM'
       ]
     },
 

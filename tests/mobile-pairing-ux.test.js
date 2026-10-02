@@ -14,10 +14,11 @@ const homeSource = readSource(['src', 'screens', 'HomeScreen.jsx']);
 test('qr pairing remains recoverable when disconnected or after scan failure', () => {
   assert.match(qrSource, /const \[scanError, setScanError\] = useState\(''\)/);
   assert.match(qrSource, /onBarcodeScanned=\{scanLocked \|\| scanError \? undefined : handleBarcodeScanned\}/);
-  assert.match(qrSource, /Disconnected is okay\. Scan the Desktop QR and OpenX will reconnect using it\./);
   assert.match(qrSource, /<Text style=\{styles\.scanAgainText\}>Scan again<\/Text>/);
+  assert.match(qrSource, /accessibilityLabel="Close QR scanner"/);
   assert.match(qrSource, /Linking\.openSettings\(\)/);
   assert.match(qrSource, /Camera frames are not saved\./);
+  assert.doesNotMatch(qrSource, /Disconnected is okay\. Scan the Desktop QR/);
 });
 
 test('home screen exposes direct recovery actions for disconnected users', () => {
