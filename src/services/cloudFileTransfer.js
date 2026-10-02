@@ -9,11 +9,11 @@ import {
 } from './fileTransfer';
 
 const PROTOCOL_VERSION = 1;
-const CHUNK_BYTES = 12 * 1024;
+const CHUNK_BYTES = 16 * 1024;
 const TRANSFER_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_ACTIVE_TRANSFERS = 3;
-const MAX_MOBILE_RECEIVE_BYTES = Math.min(MAX_FILE_SIZE, 32 * 1024 * 1024);
-const MAX_CHUNK_COUNT = Math.ceil(MAX_FILE_SIZE / CHUNK_BYTES);
+const MAX_MOBILE_RECEIVE_BYTES = MAX_FILE_SIZE;
+const MAX_CHUNK_COUNT = Math.ceil(MAX_FILE_SIZE / 1024);
 const TRANSFER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
 
@@ -249,6 +249,7 @@ class CloudFileTransferManager {
       transferId,
       fileName: sanitizeIncomingFileName(payload.fileName || 'received-file'),
       fileSize,
+      chunkBytes: Number(payload.chunkBytes) || CHUNK_BYTES,
       sha256,
       chunkCount,
       chunks: [],
@@ -265,11 +266,14 @@ class CloudFileTransferManager {
       !Number.isSafeInteger(transfer.fileSize) ||
       transfer.fileSize < 0 ||
       transfer.fileSize > MAX_MOBILE_RECEIVE_BYTES ||
+      !Number.isSafeInteger(transfer.chunkBytes) ||
+      transfer.chunkBytes < 1024 ||
+      transfer.chunkBytes > CHUNK_BYTES ||
       !HASH_PATTERN.test(transfer.sha256) ||
       !Number.isSafeInteger(transfer.chunkCount) ||
       transfer.chunkCount < 1 ||
       transfer.chunkCount > MAX_CHUNK_COUNT ||
-      transfer.chunkCount !== Math.max(1, Math.ceil(transfer.fileSize / CHUNK_BYTES));
+      transfer.chunkCount !== Math.max(1, Math.ceil(transfer.fileSize / transfer.chunkBytes));
     if (
       metadataInvalid ||
       this.incoming.has(transfer.transferId) ||
@@ -320,7 +324,7 @@ class CloudFileTransferManager {
     const chunkBytes = base64ByteLength(chunk);
     const declaredChunkSize = Number(payload.chunkSize);
     if (
-      chunkBytes > CHUNK_BYTES ||
+      chunkBytes > transfer.chunkBytes ||
       (Number.isFinite(declaredChunkSize) && declaredChunkSize !== chunkBytes) ||
       transfer.receivedBytes + chunkBytes > transfer.fileSize ||
       this.totalIncomingBufferedBytes() + chunkBytes > MAX_MOBILE_RECEIVE_BYTES

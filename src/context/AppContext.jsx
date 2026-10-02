@@ -67,7 +67,7 @@ const DEFAULT_PORT = '8080';
 const DEFAULT_DEVICE_NAME = 'My Mobile';
 const DEFAULT_CONNECTION_MODE = 'cloud';
 const PAIRING_TIMEOUT_MS = 15000;
-const CLOUD_COMMAND_TIMEOUT_MS = 60000;
+const CLOUD_COMMAND_TIMEOUT_MS = 75000;
 const CONNECTION_ERROR_MESSAGE = 'Waiting for OpenX Desktop...';
 const MAX_MOBILE_CHAT_HISTORY = 300;
 const MAX_MOBILE_MESSAGE_TEXT = 3000;
@@ -292,6 +292,7 @@ export function AppProvider({ children }) {
   const pendingPairingRef = useRef(null);
   const pendingCloudRequestsRef = useRef(new Map());
   const pendingRemoteRequestsRef = useRef(new Map());
+  const reconnectActiveConnectionRef = useRef(null);
   const cloudFileTransferRef = useRef(null);
   const transferHistoryRef = useRef([]);
   const permissionsRef = useRef(DEFAULT_PERMISSIONS);
@@ -464,6 +465,54 @@ export function AppProvider({ children }) {
     pendingCloudRequestsRef.current.delete(requestId);
     return pending;
   }, []);
+
+  const refreshCloudRequestTimeout = useCallback((requestId) => {
+    const pending = pendingCloudRequestsRef.current.get(requestId);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      if (!pendingCloudRequestsRef.current.has(requestId)) return;
+      pendingCloudRequestsRef.current.delete(requestId);
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', 'Cloud command timed out. Please try again.'),
+      ]);
+      reconnectActiveConnectionRef.current?.().catch(() => {});
+    }, CLOUD_COMMAND_TIMEOUT_MS);
+    return true;
+  }, []);
+
+  const markCloudRequestProcessing = useCallback((requestId, message, timestamp = Date.now()) => {
+    const pending = pendingCloudRequestsRef.current.get(requestId);
+    if (!pending) return false;
+    refreshCloudRequestTimeout(requestId);
+    const text = String(message || 'OpenX Desktop is processing your command.').trim();
+    if (pending.statusMessageId) {
+      const parsedTimestamp = new Date(timestamp);
+      const safeTimestamp = Number.isNaN(parsedTimestamp.getTime())
+        ? new Date().toISOString()
+        : parsedTimestamp.toISOString();
+      setMessages((current) => current.map((item) => (
+        item.id === pending.statusMessageId
+          ? {
+              ...item,
+              text,
+              timestamp: safeTimestamp,
+              pending: true,
+            }
+          : item
+      )));
+      return true;
+    }
+    const statusMessage = createMessage('assistant', text, timestamp, {
+      pending: true,
+      intent: 'assistant-status',
+      requestId,
+    });
+    pending.statusMessageId = statusMessage.id;
+    setMessages((current) => [...current, statusMessage]);
+    return true;
+  }, [refreshCloudRequestTimeout]);
 
   const clearRemoteRequest = useCallback((requestId) => {
     const pending = pendingRemoteRequestsRef.current.get(requestId);
@@ -798,6 +847,7 @@ export function AppProvider({ children }) {
     return {
       requestId: envelope.requestId || packet.requestId || '',
       timestamp: envelope.timestamp || packet.timestamp || Date.now(),
+      status,
       responseType: envelope.responseType || packet.metadata?.feature || '',
       result: {
         success: resultSource.success !== false && status === 'completed',
@@ -861,18 +911,24 @@ export function AppProvider({ children }) {
     return true;
   }, [clearRemoteRequest]);
 
-  const appendCloudAssistantResult = useCallback((result, timestamp = Date.now()) => {
+  const appendCloudAssistantResult = useCallback((result, timestamp = Date.now(), pending = null) => {
     const responseText = result?.response || result?.message || 'Command completed.';
-    setMessages((current) => [
-      ...current,
-      createMessage('assistant', responseText, timestamp, {
+    const finalMessage = createMessage('assistant', responseText, timestamp, {
         intent: result?.intent || null,
         data: result?.data || null,
         entities: result?.entities || null,
         choices: Array.isArray(result?.data?.choices) ? result.data.choices : [],
         needsClarification: result?.needsClarification === true,
-      }),
-    ]);
+      });
+    if (pending?.statusMessageId) {
+      setMessages((current) => current.map((item) => (
+        item.id === pending.statusMessageId
+          ? { ...item, ...finalMessage, id: item.id, pending: false }
+          : item
+      )));
+      return;
+    }
+    setMessages((current) => [...current, finalMessage]);
   }, []);
 
   const reconnectActiveConnection = useCallback(() => {
@@ -888,6 +944,7 @@ export function AppProvider({ children }) {
     }
     return websocketService.reconnect().catch(() => websocketService.connect(address, port));
   }, [desktopAddress, desktopPort]);
+  reconnectActiveConnectionRef.current = reconnectActiveConnection;
 
   useEffect(() => {
     let mounted = true;
@@ -1007,13 +1064,23 @@ export function AppProvider({ children }) {
       }
       const response = normalizeCloudAssistantPacket(packet);
       const requestId = response.requestId || '';
-      if (requestId) clearCloudRequest(requestId);
+      if (response.status === 'processing' || response.responseType === 'assistant-status') {
+        if (requestId) {
+          markCloudRequestProcessing(
+            requestId,
+            response.result?.response || response.result?.message,
+            response.timestamp || packet.timestamp || Date.now(),
+          );
+        }
+        return;
+      }
+      const pending = requestId ? clearCloudRequest(requestId) : null;
       const result = response.result;
       if (result?.data?.scheduleSync && result.data.snapshot) {
         applyScheduleSnapshot(result.data.snapshot);
         return;
       }
-      appendCloudAssistantResult(result, response.timestamp || packet.timestamp || Date.now());
+      appendCloudAssistantResult(result, response.timestamp || packet.timestamp || Date.now(), pending);
     });
 
     const unsubscribeMessages = websocketService.subscribeToMessages(
@@ -1418,6 +1485,7 @@ export function AppProvider({ children }) {
     clearCloudRequest,
     clearRemoteRequest,
     handleRemoteControlPacket,
+    markCloudRequestProcessing,
     normalizeCloudAssistantPacket,
     recordTransfer,
     requestScheduleSync,

@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import FadeInView from '../components/FadeInView';
 import GlassButton from '../components/GlassButton';
 import GlassPanel from '../components/GlassPanel';
-import MobileBottomDock, { getMobileBottomDockHeight } from '../components/MobileBottomDock';
+import MobileBottomDock from '../components/MobileBottomDock';
 import ScreenBackground from '../components/ScreenBackground';
 import { useApp } from '../context/AppContext';
 import { parsePairingQrPayload } from '../services/qrPairing';
@@ -30,20 +30,15 @@ export default function QRPairingScreen({ navigation, route }) {
   const [pairing, setPairing] = useState(false);
   const scanProgress = useRef(new Animated.Value(0)).current;
   const {
-    cloudStatus,
     deviceName,
-    paired,
     pairCloudDevice,
     showNotice,
   } = useApp();
   const selectedDeviceName = route?.params?.deviceName || deviceName;
   const insets = useSafeAreaInsets();
   const { height, width } = useWindowDimensions();
-  const bottomDockHeight = getMobileBottomDockHeight(insets);
   const frameSize = Math.max(196, Math.min(width - spacing.xl * 2, height * 0.31, 300));
   const scanLineMax = Math.max(18, frameSize - 26);
-  const cloudConnected = cloudStatus?.connected === true;
-  const scannerStateLabel = pairing ? 'Pairing' : scanError ? 'Paused' : 'Ready';
   const canAskCameraPermission = permission?.canAskAgain !== false;
 
   const resetScanner = useCallback(() => {
@@ -198,7 +193,7 @@ export default function QRPairingScreen({ navigation, route }) {
         style={[
           styles.scrim,
           {
-            paddingBottom: bottomDockHeight + spacing.md,
+            paddingBottom: insets.bottom + spacing.lg,
             paddingTop: insets.top + spacing.sm,
           },
         ]}
@@ -213,38 +208,9 @@ export default function QRPairingScreen({ navigation, route }) {
           >
             <Ionicons color={colors.white} name="close" size={22} />
           </Pressable>
-          <View style={styles.topCopy}>
-            <Text style={styles.topTitle}>Pair Desktop</Text>
-            <Text style={styles.topSubtitle}>
-              {cloudConnected ? 'Cloud relay online' : 'Scan works before connection'}
-            </Text>
-          </View>
-          <View style={styles.scannerStatus}>
-            <View style={[
-              styles.scannerStatusDot,
-              pairing ? styles.scannerStatusDotBusy : scanError ? styles.scannerStatusDotPaused : styles.scannerStatusDotReady,
-            ]} />
-            <Text style={styles.scannerStatusText}>{scannerStateLabel}</Text>
-          </View>
-        </View>
-
-        <View style={styles.connectionBanner}>
-          <Ionicons color={colors.text} name={cloudConnected ? 'cloud-done-outline' : 'cloud-offline-outline'} size={18} />
-          <Text style={styles.connectionBannerText}>
-            {cloudConnected
-              ? 'Connected. Scan a new QR only when pairing another Desktop.'
-              : 'Disconnected is okay. Scan the Desktop QR and OpenX will reconnect using it.'}
-          </Text>
         </View>
 
         <View style={styles.scanArea}>
-          <View style={styles.instructions}>
-            <Text style={styles.title}>Scan OpenX QR</Text>
-            <Text style={styles.subtitle}>
-              Point your camera at the QR code shown in OpenX Desktop.
-            </Text>
-          </View>
-
           <View
             style={[
               styles.scannerFrame,
@@ -303,28 +269,7 @@ export default function QRPairingScreen({ navigation, route }) {
           </View>
         </View>
 
-        <View style={styles.hintCard}>
-          <View style={styles.hintIcon}>
-            <Ionicons color={colors.text} name="desktop-outline" size={20} />
-          </View>
-          <View style={styles.hintCopy}>
-            <Text style={styles.hintTitle}>{paired ? 'Refresh pairing' : 'Desktop QR first'}</Text>
-            <Text style={styles.hintText}>
-              Open OpenX Desktop, generate the Mobile QR, then keep it inside this frame.
-            </Text>
-            <View style={styles.stepRow}>
-              <Text style={styles.stepChip}>1 Desktop</Text>
-              <Text style={styles.stepChip}>2 Generate QR</Text>
-              <Text style={styles.stepChip}>3 Scan</Text>
-            </View>
-          </View>
-        </View>
-
       </View>
-      <MobileBottomDock
-        activeRoute="QRPairing"
-        navigation={navigation}
-      />
     </View>
   );
 }
@@ -389,7 +334,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(3, 6, 14, 0.52)',
     flex: 1,
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     paddingBottom: spacing.xxl,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
@@ -410,92 +355,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 46,
   },
-  topCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  topTitle: {
-    color: colors.white,
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  topSubtitle: {
-    color: 'rgba(255,255,255,0.66)',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  scannerStatus: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.34)',
-    borderColor: 'rgba(255, 255, 255, 0.20)',
-    borderRadius: radius.round,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.xs,
-    minHeight: 34,
-    paddingHorizontal: spacing.sm,
-  },
-  scannerStatusDot: {
-    borderRadius: radius.round,
-    height: 7,
-    width: 7,
-  },
-  scannerStatusDotReady: {
-    backgroundColor: colors.success,
-  },
-  scannerStatusDotBusy: {
-    backgroundColor: colors.blue,
-  },
-  scannerStatusDotPaused: {
-    backgroundColor: colors.warning,
-  },
-  scannerStatusText: {
-    color: colors.white,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  connectionBanner: {
-    ...shadows.card,
-    alignItems: 'center',
-    backgroundColor: 'rgba(10, 12, 18, 0.68)',
-    borderColor: 'rgba(255,255,255,0.18)',
-    borderRadius: radius.round,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.sm,
-    minHeight: 44,
-    paddingHorizontal: spacing.md,
-    width: '100%',
-  },
-  connectionBannerText: {
-    color: colors.textSecondary,
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '800',
-    lineHeight: 17,
-  },
   scanArea: {
     alignItems: 'center',
     gap: spacing.lg,
     justifyContent: 'center',
     width: '100%',
-  },
-  instructions: { alignItems: 'center' },
-  title: {
-    color: colors.white,
-    fontSize: 28,
-    fontWeight: '900',
-    textShadowColor: '#000000',
-    textShadowRadius: 4,
-  },
-  subtitle: {
-    color: '#D8E0ED',
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: spacing.sm,
-    maxWidth: 300,
-    textAlign: 'center',
   },
   scannerFrame: {
     ...shadows.floating,
@@ -609,61 +473,5 @@ const styles = StyleSheet.create({
     color: colors.background,
     fontSize: 13,
     fontWeight: '900',
-  },
-  hintCard: {
-    ...shadows.card,
-    alignItems: 'center',
-    backgroundColor: 'rgba(10, 12, 18, 0.72)',
-    borderColor: 'rgba(255,255,255,0.18)',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.md,
-    padding: spacing.md,
-    width: '100%',
-  },
-  hintIcon: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderColor: 'rgba(255,255,255,0.22)',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    height: 42,
-    justifyContent: 'center',
-    width: 42,
-  },
-  hintCopy: {
-    flex: 1,
-    minWidth: 0,
-  },
-  hintTitle: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  hintText: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '700',
-    lineHeight: 17,
-    marginTop: 3,
-  },
-  stepRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-  },
-  stepChip: {
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    borderColor: 'rgba(255,255,255,0.16)',
-    borderRadius: radius.round,
-    borderWidth: 1,
-    color: colors.textSecondary,
-    fontSize: 10,
-    fontWeight: '900',
-    overflow: 'hidden',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
   },
 });
